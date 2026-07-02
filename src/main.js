@@ -2,71 +2,48 @@ import './style.css';
 import { renderQr, createScanner } from './qr.js';
 import { createPeerConnection, waitForIceGatheringComplete } from './webrtc.js';
 import { compressSdp, decompressSdp } from './sdp.js';
+import { createSession, fetchSession, submitAnswer } from './signal.js';
 
 const app = document.querySelector('#app');
 
 app.innerHTML = `
   <header>
     <h1>QR P2P Text Share</h1>
-    <p>Pair two browsers by scanning QR codes, then type — no server, no accounts.</p>
+    <p>Open on two devices. One shows a code, the other clicks Connect — no server sees your text.</p>
   </header>
 
   <div class="panel">
     <div class="status-row">
       <div class="status-dot" id="statusDot"></div>
-      <div class="status-text" id="statusText">Disconnected</div>
+      <div class="status-text" id="statusText">Starting…</div>
     </div>
     <div class="controls-row">
       <label class="checkbox">
         <input type="checkbox" id="sameWifi" />
         Same Wi-Fi (no STUN)
       </label>
-      <button id="hostBtn">Start as Host</button>
-      <button id="joinBtn" class="secondary">Join Session</button>
-      <button id="resetBtn" class="secondary hidden">Reset</button>
     </div>
   </div>
 
-  <div class="panel hidden" id="offerPanel">
-    <h2>1. Share this QR (Offer)</h2>
-    <p class="hint">Have the other device scan this code.</p>
+  <div class="panel" id="hostPanel">
+    <h2>Your code</h2>
+    <p class="hint">Have the other device scan this or enter the code below.</p>
     <div class="qr-wrap">
-      <canvas id="offerCanvas"></canvas>
-      <div class="code-box"><textarea id="offerCode" readonly></textarea></div>
-      <button id="copyOfferBtn" class="secondary">Copy code</button>
+      <canvas id="hostCanvas"></canvas>
+      <div class="big-code" id="hostCodeText">------</div>
     </div>
   </div>
 
-  <div class="panel hidden" id="scanOfferPanel">
-    <h2>Scan the Host's QR (Offer)</h2>
-    <p class="hint">Point your camera at the offer QR code, or paste the code below.</p>
-    <div class="qr-wrap"><video id="scanOfferVideo" muted playsinline></video></div>
-    <div class="paste-row">
-      <textarea id="pasteOffer" placeholder="Paste offer code here"></textarea>
-      <button id="applyOfferBtn" class="secondary">Use pasted code</button>
+  <div class="panel">
+    <button id="connectBtn">Connect</button>
+    <div class="hidden" id="connectPanel">
+      <div class="qr-wrap"><video id="scanVideo" muted playsinline></video></div>
+      <div class="code-row">
+        <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
+        <button id="codeGoBtn" class="secondary">Join</button>
+      </div>
+      <div class="error-msg hidden" id="connectError"></div>
     </div>
-    <div class="error-msg hidden" id="offerError"></div>
-  </div>
-
-  <div class="panel hidden" id="answerPanel">
-    <h2>2. Share this QR (Answer)</h2>
-    <p class="hint">Have the host scan this code to finish pairing.</p>
-    <div class="qr-wrap">
-      <canvas id="answerCanvas"></canvas>
-      <div class="code-box"><textarea id="answerCode" readonly></textarea></div>
-      <button id="copyAnswerBtn" class="secondary">Copy code</button>
-    </div>
-  </div>
-
-  <div class="panel hidden" id="scanAnswerPanel">
-    <h2>3. Scan the Joiner's QR (Answer)</h2>
-    <p class="hint">Point your camera at the answer QR code, or paste the code below.</p>
-    <div class="qr-wrap"><video id="scanAnswerVideo" muted playsinline></video></div>
-    <div class="paste-row">
-      <textarea id="pasteAnswer" placeholder="Paste answer code here"></textarea>
-      <button id="applyAnswerBtn" class="secondary">Use pasted code</button>
-    </div>
-    <div class="error-msg hidden" id="answerError"></div>
   </div>
 
   <div class="panel">
@@ -80,42 +57,30 @@ const el = (id) => document.getElementById(id);
 const statusDot = el('statusDot');
 const statusText = el('statusText');
 const sameWifiCheckbox = el('sameWifi');
-const hostBtn = el('hostBtn');
-const joinBtn = el('joinBtn');
-const resetBtn = el('resetBtn');
 
-const offerPanel = el('offerPanel');
-const offerCanvas = el('offerCanvas');
-const offerCode = el('offerCode');
-const copyOfferBtn = el('copyOfferBtn');
+const hostPanel = el('hostPanel');
+const hostCanvas = el('hostCanvas');
+const hostCodeText = el('hostCodeText');
 
-const scanOfferPanel = el('scanOfferPanel');
-const scanOfferVideo = el('scanOfferVideo');
-const pasteOffer = el('pasteOffer');
-const applyOfferBtn = el('applyOfferBtn');
-const offerError = el('offerError');
-
-const answerPanel = el('answerPanel');
-const answerCanvas = el('answerCanvas');
-const answerCode = el('answerCode');
-const copyAnswerBtn = el('copyAnswerBtn');
-
-const scanAnswerPanel = el('scanAnswerPanel');
-const scanAnswerVideo = el('scanAnswerVideo');
-const pasteAnswer = el('pasteAnswer');
-const applyAnswerBtn = el('applyAnswerBtn');
-const answerError = el('answerError');
+const connectBtn = el('connectBtn');
+const connectPanel = el('connectPanel');
+const scanVideo = el('scanVideo');
+const codeInput = el('codeInput');
+const codeGoBtn = el('codeGoBtn');
+const connectError = el('connectError');
 
 const sharedText = el('sharedText');
 
+const CODE_RE = /^\d{6}$/;
+
 const state = {
-  role: null, // 'host' | 'joiner'
+  mode: null, // 'host' | 'joiner'
   pc: null,
   channel: null,
-  connected: false,
   isRemoteUpdate: false,
-  offerScanner: null,
-  answerScanner: null,
+  pollTimer: null,
+  scanner: null,
+  hostCode: null,
 };
 
 let debounceTimer = null;
@@ -129,27 +94,22 @@ function showPanel(elm, show) {
   elm.classList.toggle('hidden', !show);
 }
 
-function resetPanels() {
-  showPanel(offerPanel, false);
-  showPanel(scanOfferPanel, false);
-  showPanel(answerPanel, false);
-  showPanel(scanAnswerPanel, false);
-  offerError.classList.add('hidden');
-  answerError.classList.add('hidden');
+function stopPolling() {
+  clearInterval(state.pollTimer);
+  state.pollTimer = null;
 }
 
-async function stopScanner(which) {
-  const key = which === 'offer' ? 'offerScanner' : 'answerScanner';
-  if (state[key]) {
-    state[key].stop();
-    state[key].destroy();
-    state[key] = null;
+async function stopScanner() {
+  if (state.scanner) {
+    state.scanner.stop();
+    state.scanner.destroy();
+    state.scanner = null;
   }
 }
 
-function teardownConnection() {
-  stopScanner('offer');
-  stopScanner('answer');
+function teardown() {
+  stopPolling();
+  stopScanner();
   if (state.channel) {
     state.channel.close();
     state.channel = null;
@@ -158,33 +118,23 @@ function teardownConnection() {
     state.pc.close();
     state.pc = null;
   }
-  state.connected = false;
+  state.hostCode = null;
   sharedText.value = '';
   sharedText.disabled = true;
-}
-
-function resetAll() {
-  teardownConnection();
-  state.role = null;
-  resetPanels();
-  setStatus('Disconnected', '');
-  hostBtn.classList.remove('hidden');
-  joinBtn.classList.remove('hidden');
-  resetBtn.classList.add('hidden');
-  sameWifiCheckbox.disabled = false;
 }
 
 function setupDataChannel(channel) {
   state.channel = channel;
   channel.onopen = () => {
-    state.connected = true;
     setStatus('Connected', 'connected');
     sharedText.disabled = false;
-    stopScanner('offer');
-    stopScanner('answer');
+    stopPolling();
+    stopScanner();
+    showPanel(hostPanel, false);
+    showPanel(connectPanel, false);
+    connectBtn.classList.add('hidden');
   };
   channel.onclose = () => {
-    state.connected = false;
     setStatus('Disconnected', '');
     sharedText.disabled = true;
   };
@@ -217,7 +167,7 @@ sharedText.addEventListener('input', () => {
 
 function wirePeerConnectionLifecycle(pc) {
   pc.onconnectionstatechange = () => {
-    if (!state.pc) return;
+    if (!state.pc || pc !== state.pc) return;
     if (pc.connectionState === 'connecting') {
       setStatus('Connecting…', 'connecting');
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
@@ -228,14 +178,18 @@ function wirePeerConnectionLifecycle(pc) {
   };
 }
 
+function codeUrl(code) {
+  return `${location.origin}${location.pathname}?code=${code}`;
+}
+
 async function startHost() {
-  resetPanels();
-  state.role = 'host';
-  hostBtn.classList.add('hidden');
-  joinBtn.classList.add('hidden');
-  resetBtn.classList.remove('hidden');
-  sameWifiCheckbox.disabled = true;
-  setStatus('Connecting…', 'connecting');
+  teardown();
+  state.mode = 'host';
+  connectBtn.classList.remove('hidden');
+  showPanel(hostPanel, true);
+  showPanel(connectPanel, false);
+  hostCodeText.textContent = '------';
+  setStatus('Waiting for a peer…', 'connecting');
 
   const pc = createPeerConnection(sameWifiCheckbox.checked);
   state.pc = pc;
@@ -246,101 +200,126 @@ async function startHost() {
   await pc.setLocalDescription(offer);
   await waitForIceGatheringComplete(pc);
 
-  const payload = JSON.stringify({ t: 'offer', sdp: compressSdp(pc.localDescription.sdp) });
-  offerCode.value = payload;
-  await renderQr(offerCanvas, payload);
-  showPanel(offerPanel, true);
-  showPanel(scanAnswerPanel, true);
-
-  await startScanning('answer', scanAnswerVideo, handleAnswerPayload, answerError);
-}
-
-async function startJoin() {
-  resetPanels();
-  state.role = 'joiner';
-  hostBtn.classList.add('hidden');
-  joinBtn.classList.add('hidden');
-  resetBtn.classList.remove('hidden');
-  sameWifiCheckbox.disabled = true;
-  setStatus('Disconnected', '');
-
-  showPanel(scanOfferPanel, true);
-  await startScanning('offer', scanOfferVideo, handleOfferPayload, offerError);
-}
-
-async function startScanning(which, videoEl, onPayload, errorEl) {
-  const key = which === 'offer' ? 'offerScanner' : 'answerScanner';
-  errorEl.classList.add('hidden');
+  let code;
   try {
-    const scanner = createScanner(videoEl, (data) => {
-      onPayload(data, errorEl);
-    });
-    state[key] = scanner;
-    await scanner.start();
+    ({ code } = await createSession(compressSdp(pc.localDescription.sdp)));
   } catch (err) {
-    errorEl.textContent = 'Camera unavailable — paste the code below instead.';
-    errorEl.classList.remove('hidden');
+    setStatus('Signaling server unavailable', 'failed');
+    return;
   }
+  if (state.mode !== 'host' || state.pc !== pc) return; // superseded
+
+  state.hostCode = code;
+  hostCodeText.textContent = code;
+  await renderQr(hostCanvas, codeUrl(code));
+
+  pollForAnswer(pc, code);
 }
 
-async function handleOfferPayload(raw, errorEl) {
-  try {
-    const payload = JSON.parse(raw);
-    if (payload.t !== 'offer') throw new Error('not an offer');
-    const sdp = decompressSdp(payload.sdp);
+function pollForAnswer(pc, code) {
+  stopPolling();
+  state.pollTimer = setInterval(async () => {
+    if (state.pc !== pc || state.hostCode !== code) {
+      stopPolling();
+      return;
+    }
+    try {
+      const session = await fetchSession(code);
+      if (session && session.answer && state.pc === pc) {
+        stopPolling();
+        await pc.setRemoteDescription({ type: 'answer', sdp: decompressSdp(session.answer) });
+      }
+    } catch {
+      // transient network error, keep polling
+    }
+  }, 1500);
+}
 
-    await stopScanner('offer');
-    showPanel(scanOfferPanel, false);
-    setStatus('Connecting…', 'connecting');
+async function joinWithCode(code) {
+  await stopScanner();
+  connectError.classList.add('hidden');
+
+  if (!CODE_RE.test(code)) {
+    connectError.textContent = 'That code looks invalid — it should be 6 digits.';
+    connectError.classList.remove('hidden');
+    return;
+  }
+
+  teardown();
+  state.mode = 'joiner';
+  showPanel(hostPanel, false);
+  showPanel(connectPanel, false);
+  setStatus('Connecting…', 'connecting');
+
+  try {
+    const session = await fetchSession(code);
+    if (!session) throw new Error('Code not found or expired');
 
     const pc = createPeerConnection(sameWifiCheckbox.checked);
     state.pc = pc;
     wirePeerConnectionLifecycle(pc);
     pc.ondatachannel = (event) => setupDataChannel(event.channel);
 
-    await pc.setRemoteDescription({ type: 'offer', sdp });
+    await pc.setRemoteDescription({ type: 'offer', sdp: decompressSdp(session.offer) });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitForIceGatheringComplete(pc);
 
-    const outPayload = JSON.stringify({ t: 'answer', sdp: compressSdp(pc.localDescription.sdp) });
-    answerCode.value = outPayload;
-    await renderQr(answerCanvas, outPayload);
-    showPanel(answerPanel, true);
+    await submitAnswer(code, compressSdp(pc.localDescription.sdp));
   } catch (err) {
-    errorEl.textContent = 'Could not read that code: ' + err.message;
-    errorEl.classList.remove('hidden');
+    connectError.textContent = err.message;
+    connectError.classList.remove('hidden');
+    startHost();
   }
 }
 
-async function handleAnswerPayload(raw, errorEl) {
+function extractCode(raw) {
+  const trimmed = raw.trim();
+  if (CODE_RE.test(trimmed)) return trimmed;
   try {
-    const payload = JSON.parse(raw);
-    if (payload.t !== 'answer') throw new Error('not an answer');
-    const sdp = decompressSdp(payload.sdp);
-
-    await stopScanner('answer');
-    showPanel(scanAnswerPanel, false);
-
-    await state.pc.setRemoteDescription({ type: 'answer', sdp });
-  } catch (err) {
-    errorEl.textContent = 'Could not read that code: ' + err.message;
-    errorEl.classList.remove('hidden');
+    const u = new URL(trimmed);
+    const c = u.searchParams.get('code');
+    if (c && CODE_RE.test(c)) return c;
+  } catch {
+    // not a URL
   }
+  return null;
 }
 
-hostBtn.addEventListener('click', () => startHost());
-joinBtn.addEventListener('click', () => startJoin());
-resetBtn.addEventListener('click', () => resetAll());
-
-applyOfferBtn.addEventListener('click', () => {
-  const raw = pasteOffer.value.trim();
-  if (raw) handleOfferPayload(raw, offerError);
+connectBtn.addEventListener('click', async () => {
+  const opening = connectPanel.classList.contains('hidden');
+  showPanel(connectPanel, opening);
+  connectError.classList.add('hidden');
+  if (opening) {
+    try {
+      const scanner = createScanner(scanVideo, (data) => {
+        const code = extractCode(data);
+        if (code) joinWithCode(code);
+      });
+      state.scanner = scanner;
+      await scanner.start();
+    } catch {
+      // camera unavailable — manual code entry below still works
+    }
+  } else {
+    await stopScanner();
+  }
 });
-applyAnswerBtn.addEventListener('click', () => {
-  const raw = pasteAnswer.value.trim();
-  if (raw) handleAnswerPayload(raw, answerError);
+
+codeGoBtn.addEventListener('click', () => joinWithCode(codeInput.value.trim()));
+codeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') joinWithCode(codeInput.value.trim());
 });
 
-copyOfferBtn.addEventListener('click', () => navigator.clipboard.writeText(offerCode.value));
-copyAnswerBtn.addEventListener('click', () => navigator.clipboard.writeText(answerCode.value));
+sameWifiCheckbox.addEventListener('change', () => {
+  if (state.mode === 'host' && !(state.channel && state.channel.readyState === 'open')) {
+    startHost();
+  }
+});
+
+const initialCode = new URLSearchParams(location.search).get('code');
+if (initialCode && CODE_RE.test(initialCode)) {
+  joinWithCode(initialCode);
+} else {
+  startHost();
+}

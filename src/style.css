@@ -158,40 +158,36 @@ video {
   background: #000;
 }
 
-.code-box {
-  width: 100%;
-}
-
-.code-box textarea {
-  width: 100%;
-  min-height: 70px;
-  resize: vertical;
-  background: #0b0d12;
-  color: var(--text-dim);
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  padding: 8px;
+.big-code {
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 2.2rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--text);
 }
 
-.paste-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.paste-row textarea {
+#connectBtn {
   width: 100%;
-  min-height: 60px;
+}
+
+.code-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.code-row input {
+  flex: 1;
+  min-width: 0;
   background: #0b0d12;
   color: var(--text);
   border: 1px solid var(--panel-border);
   border-radius: 8px;
-  padding: 8px;
+  padding: 10px;
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: 1.1rem;
+  letter-spacing: 0.1em;
+  text-align: center;
 }
 
 .hidden {
