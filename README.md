@@ -31,3 +31,17 @@ npm run preview  # serve the production build
 
 The production build is a static bundle — deploy `dist/` to any static
 host (it does not need a backend).
+
+## Deployment (GitHub Pages + Cloudflare)
+
+`.github/workflows/deploy.yml` builds and deploys `dist/` to GitHub Pages
+via GitHub Actions on every push to `main`. One-time setup:
+
+1. In the repo's **Settings → Pages**, set **Source** to "GitHub Actions".
+2. `public/CNAME` already points Pages at `9.1-1-1.de`; if you change the
+   domain, update that file to match.
+3. In Cloudflare DNS for the domain, add a `CNAME` record pointing to
+   `nickyreinert.github.io` (DNS-only or proxied both work; GitHub issues
+   its own TLS cert for the custom domain either way).
+4. Once the domain resolves, enable **Enforce HTTPS** in the Pages
+   settings.
