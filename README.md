@@ -55,11 +55,26 @@ on load, no extra tap needed.
 
 - Instant, debounced two-way sync over a direct WebRTC DataChannel
   (DTLS-encrypted, fully peer-to-peer — no server ever sees the content).
+- The text area isn't locked while waiting for a peer — type (or pick a
+  file) before anyone's connected, and it sends automatically the moment
+  a peer joins.
 - **Hidden mode:** masks the text area with dots, briefly revealing each
   edit for ~900ms before re-masking (native browser masking, so copy and
-  sync still work on the real text underneath).
+  sync still work on the real text underneath). Synced live to the peer.
 - One-click **Copy to clipboard** — always copies the real text, even
   while masked.
+
+**File sharing**
+
+- Send a file (up to 25MB) straight over the same DataChannel — chunked
+  and backpressure-aware, so it can't flood the connection or stall it.
+- Pick a file before a peer has joined and it queues, sending
+  automatically as soon as the connection opens — same as pre-typed text.
+- The receiving device gets an automatic download prompt once the
+  transfer completes, no extra click needed.
+- Whole file is reassembled in memory before it can be saved, so it's
+  bounded by device memory — fine for documents/images/screenshots, not
+  meant for multi-GB transfers (especially on mobile Safari).
 
 **Design**
 
@@ -186,4 +201,6 @@ falls back to STUN-only, same as before.
 - Hidden mode with per-edit reveal, synced live to the peer, plus one-click copy
 - Scanning the QR preselects the Same-Wi-Fi and Hidden settings on the joining device
 - TURN relay fallback (Cloudflare) for peers behind strict/symmetric NAT
+- Text area and file picker both work pre-connection and auto-send once a peer joins
+- File transfer (up to 25MB) over the same DataChannel, with an automatic download on receipt
 - Static Vite build on GitHub Pages, ephemeral Cloudflare Worker + KV relay (10-min TTL)
