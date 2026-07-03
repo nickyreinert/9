@@ -85,6 +85,17 @@ on load, no extra tap needed.
 - Footer with credit links (Institut für digitale Herausforderung, Buy Me
   a Coffee, HTTP Mirror).
 
+**Installable (PWA)**
+
+- Add to your home screen on iOS/Android or install as a desktop app in
+  Chrome/Edge — launches full-screen with no browser chrome, its own app
+  icon (the seven-segment "9"), and its own entry in the app switcher.
+- The service worker only caches the static app shell (HTML/CSS/JS,
+  content-hashed so a new deploy is never served stale). The signaling
+  worker's API, STUN/TURN, and WebRTC itself are never touched by it —
+  this app fundamentally needs a live connection to pair two devices, so
+  there's no meaningful "offline mode," just a faster repeat load.
+
 ## Where it comes in handy
 
 - **Wi-Fi password to a guest** — no reading it aloud, no sticky note.

@@ -5,6 +5,12 @@ import { compressSdp, decompressSdp } from './sdp.js';
 import { createSession, fetchSession, submitAnswer, deleteSession, fetchTurnServers } from './signal.js';
 import { sendFile, triggerDownload, MAX_FILE_SIZE } from './filetransfer.js';
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
 const app = document.querySelector('#app');
 
 app.innerHTML = `
