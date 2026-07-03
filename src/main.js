@@ -69,6 +69,8 @@ app.innerHTML = `
   <footer class="site-footer">
     <span>Powered by <a href="https://institut-fdh.de" target="_blank" rel="noopener noreferrer">Institut für digitale Herausforderung</a></span>
     <span class="footer-sep">·</span>
+    <a href="buymeacoffee.com/nickyreinert" target="_blank" rel="noopener noreferrer">Buy me a coffee</a>
+    <span class="footer-sep">·</span>
     <a href="https://9000.1-1-1.de/" target="_blank" rel="noopener noreferrer">HTTP Mirror</a>
   </footer>
 `;
