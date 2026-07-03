@@ -284,6 +284,10 @@ video {
   display: block;
 }
 
+video.video-needs-rotation {
+  transform: rotate(90deg);
+}
+
 .numpad {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
