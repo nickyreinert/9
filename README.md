@@ -1,35 +1,94 @@
 # 9 - Share text. Quickly. Secure. Anonymous.
 
-Text sync between two devices over a direct WebRTC DataChannel. The
-shared text itself is always fully peer-to-peer and DTLS-encrypted — no
-server ever sees it, nothing is stored.
+**Share a bit of text between two devices, instantly and privately.**
 
-## How it works
+Open the same page on both devices, connect them with a QR scan or a
+6-digit code, and whatever you type in one shows up in the other in real
+time. The text travels over a direct, DTLS-encrypted WebRTC connection
+between the two devices — no server ever sees it, and nothing is stored
+anywhere.
 
-1. Open the page on both devices. Each one immediately generates a QR
-   code and a 6-digit code — no button press required.
-2. On the device you want to join *from*, click **Connect**. Either scan
-   the other device's QR with the in-page camera, or just type in the
-   6-digit code you read off its screen.
-3. The DataChannel opens automatically and the shared textarea syncs
-   instantly in both directions.
+Perfect for those little "how do I get this string from here to there?"
+moments where email, chat, or reading it aloud all feel wrong.
 
-Reloading the page always generates a fresh code. Scanning the QR with
-your phone's regular camera app also works — it encodes a plain URL
-(`?code=123456`) that auto-joins on load, no extra click needed.
+![Screenshot 9](image.png)
 
-Check **Same Wi-Fi (no STUN)** when both devices are on the same local
-network for a direct LAN connection. Leave it unchecked to use a public
-STUN server for NAT traversal (still peer-to-peer).
+## Getting started
 
-### Why there's a signaling relay
+1. Open the page on both devices. Each one instantly shows a QR code and
+   a 6-digit code — no button press needed.
+2. On the device you want to connect *from*, hit **Connect** and either:
+   - **scan** the other device's QR with the in-page camera, or
+   - **type** the 6-digit code (or tap it in on the on-screen numpad).
+3. That's it — the connection opens automatically and the shared text
+   area syncs both ways.
 
-WebRTC still needs the two devices to exchange a one-time connection
-handshake (SDP offer/answer) before a P2P link exists — that data is too
-large to fit in a 6-digit code by itself. `worker/` is a tiny Cloudflare
-Worker + KV store that holds each pending handshake under its code for
-10 minutes and is deleted/expired right after use. It never sees your
-shared text, only the connection setup metadata.
+Reloading always gives you a fresh code. Scanning the QR with your
+phone's normal camera app works too: it opens a link that auto-connects
+on load, no extra tap needed.
+
+## What it can do
+
+**Connecting**
+
+- Auto-generates a QR code + 6-digit code on page load — zero clicks.
+- Two ways to enter someone else's code: scan their QR (the camera swaps
+  into the same slot) or use the on-screen numpad / type it manually.
+- **Dual signaling mode:** scanning the QR embeds the connection offer
+  directly, so it never touches Cloudflare; typing or tapping in the code
+  fetches it through a tiny Cloudflare relay instead.
+- **Same Wi-Fi (no STUN)** toggle for direct LAN connections vs. Google
+  STUN for cross-network NAT traversal — with tooltips explaining both
+  that and the Cloudflare relay.
+- The Connect card auto-collapses once paired, giving the text area the
+  full space.
+
+**Text sharing**
+
+- Instant, debounced two-way sync over a direct WebRTC DataChannel
+  (DTLS-encrypted, fully peer-to-peer — no server ever sees the content).
+- **Hidden mode:** masks the text area with dots, briefly revealing each
+  edit for ~900ms before re-masking (native browser masking, so copy and
+  sync still work on the real text underneath).
+- One-click **Copy to clipboard** — always copies the real text, even
+  while masked.
+
+**Design**
+
+- Two-column header: a seven-segment CSS "9" (no font dependency) plus a
+  3×3 accent dot grid sized to match.
+- Dark, compact, single-card connect UI with hover tooltips on the QR and
+  the Same-Wi-Fi toggle.
+- Footer with credit links (Institut für digitale Herausforderung, Buy Me
+  a Coffee, HTTP Mirror).
+
+## Where it comes in handy
+
+- **Wi-Fi password to a guest** — no reading it aloud, no sticky note.
+- **2FA / TOTP setup secret** from phone to laptop when adding a new
+  authenticator app.
+- **SSH public key or GPG fingerprint** between two machines during
+  setup, without a USB stick.
+- **API key / webhook secret** between dev machines — avoids pasting into
+  Slack or email where it lingers in history and logs.
+- **Support / IT handoff** — hand a user a temp password without saying it
+  out loud in an open office.
+- **Boarding pass / confirmation code** between your phone and a kiosk or
+  check-in desk.
+- **CLI → browser handoff** — copy a device-flow code or local dev URL
+  from a terminal to whatever screen you're actually looking at.
+
+## Why there's a signaling relay
+
+WebRTC needs the two devices to swap a one-time connection handshake (an
+SDP offer/answer) before a direct link exists — and that's too large to
+fit inside a 6-digit code on its own. `worker/` is a tiny Cloudflare
+Worker + KV store that holds each pending handshake under its code for 10
+minutes, then expires it right after use. It only ever sees connection
+setup metadata — never your shared text.
+
+Scanning the QR skips the relay entirely, because the handshake is
+embedded straight into the QR itself.
 
 ## Development
 
@@ -83,3 +142,14 @@ via GitHub Actions on every push to `main`. One-time setup:
    URL. The deploy workflow passes it into the build as
    `VITE_SIGNAL_URL`.
 5. Re-run the deploy workflow (or push again) so the site picks it up.
+
+## Release notes
+
+**Latest**
+
+- Peer-to-peer text sync over a direct, DTLS-encrypted WebRTC DataChannel
+- Auto-generated QR + 6-digit code, with QR-scan or numpad/manual entry
+- Dual signaling: QR embeds the offer (no relay); codes use the Cloudflare relay
+- Same-Wi-Fi (LAN) vs. STUN toggle for cross-network connections
+- Hidden mode with per-edit reveal, plus one-click copy
+- Static Vite build on GitHub Pages, ephemeral Cloudflare Worker + KV relay (10-min TTL)
