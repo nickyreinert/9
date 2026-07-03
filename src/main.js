@@ -22,12 +22,18 @@ app.innerHTML = `
   </header>
 
   <div class="panel connect-panel">
-    <div class="status-row">
+    <div class="row status-row">
       <div class="status-dot" id="statusDot"></div>
       <div class="status-text" id="statusText">Starting…</div>
+      <button id="cameraToggleBtn" class="icon-btn" title="Scan a QR code with your camera" aria-label="Scan QR code">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 1-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2" stroke-linecap="round"/>
+          <rect x="9" y="9" width="6" height="6" rx="1"/>
+        </svg>
+      </button>
     </div>
 
-    <div class="connect-row">
+    <div class="row qr-row">
       <div class="qr-hover" tabindex="0">
         <canvas id="hostCanvas"></canvas>
         <div class="bubble qr-bubble">
@@ -35,25 +41,18 @@ app.innerHTML = `
           <div class="bubble-url" id="qrTooltipUrl"></div>
         </div>
       </div>
-
       <div class="big-code" id="hostCodeText">------</div>
-
-      <div class="join-controls">
-        <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
-        <button id="joinCodeBtn">Connect</button>
-        <button id="cameraToggleBtn" class="icon-btn" title="Scan a QR code with your camera" aria-label="Scan QR code">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 1-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2" stroke-linecap="round"/>
-            <rect x="9" y="9" width="6" height="6" rx="1"/>
-          </svg>
-        </button>
-      </div>
     </div>
 
     <video id="scanVideo" class="hidden" muted playsinline></video>
     <div class="error-msg hidden" id="connectError"></div>
 
-    <label class="checkbox">
+    <div class="row join-controls">
+      <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
+      <button id="joinCodeBtn">Connect</button>
+    </div>
+
+    <label class="row checkbox">
       <input type="checkbox" id="sameWifi" />
       Same Wi-Fi (no STUN)
       <span class="tooltip" tabindex="0">?
