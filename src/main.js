@@ -2,7 +2,7 @@ import './style.css';
 import { renderQr, createScanner } from './qr.js';
 import { createPeerConnection, waitForIceGatheringComplete } from './webrtc.js';
 import { compressSdp, decompressSdp } from './sdp.js';
-import { createSession, fetchSession, submitAnswer } from './signal.js';
+import { createSession, fetchSession, submitAnswer, fetchTurnServers } from './signal.js';
 
 const app = document.querySelector('#app');
 
@@ -176,6 +176,14 @@ const state = {
 let debounceTimer = null;
 let revealTimer = null;
 
+// Fetched once per page load and reused for every connection attempt — the
+// TURN service issues credentials valid for a day, far longer than a session.
+let turnServersPromise = null;
+function getTurnServers() {
+  if (!turnServersPromise) turnServersPromise = fetchTurnServers();
+  return turnServersPromise;
+}
+
 function flashReveal() {
   if (!hiddenToggle.checked) return;
   sharedText.classList.remove('masked');
@@ -334,7 +342,10 @@ async function startHost() {
   qrTooltipUrl.textContent = '';
   setStatus('Waiting for a peer…', 'connecting');
 
-  const pc = createPeerConnection(sameWifiCheckbox.checked);
+  const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+  if (state.mode !== 'host') return; // superseded while fetching TURN credentials
+
+  const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
   state.pc = pc;
   wirePeerConnectionLifecycle(pc);
   setupDataChannel(pc.createDataChannel('text'));
@@ -412,7 +423,8 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
       offerSdp = decompressSdp(session.offer);
     }
 
-    const pc = createPeerConnection(sameWifiCheckbox.checked);
+    const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+    const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
     state.pc = pc;
     wirePeerConnectionLifecycle(pc);
     pc.ondatachannel = (event) => setupDataChannel(event.channel);

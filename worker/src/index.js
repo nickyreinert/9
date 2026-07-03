@@ -26,6 +26,35 @@ async function allocateCode(sessions) {
   return null;
 }
 
+// Mints short-lived Cloudflare TURN credentials so peers behind strict/
+// symmetric NAT (common on carrier mobile hotspots) have a relay fallback
+// when direct STUN-assisted P2P fails. Requires the TURN_KEY_ID and
+// TURN_KEY_API_TOKEN secrets from a Cloudflare Realtime TURN key; if they
+// aren't configured, callers just get an empty list and fall back to STUN.
+async function turnCredentials(env) {
+  if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) {
+    return json({ iceServers: [] });
+  }
+  try {
+    const res = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ttl: 86400 }),
+      }
+    );
+    if (!res.ok) return json({ iceServers: [] });
+    const data = await res.json();
+    return json({ iceServers: data.iceServers ? [data.iceServers] : [] });
+  } catch {
+    return json({ iceServers: [] });
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -34,6 +63,10 @@ export default {
 
     const url = new URL(request.url);
     const parts = url.pathname.split('/').filter(Boolean);
+
+    if (parts[0] === 'turn' && request.method === 'GET' && parts.length === 1) {
+      return turnCredentials(env);
+    }
 
     if (parts[0] !== 'session') {
       return json({ error: 'not found' }, 404);
