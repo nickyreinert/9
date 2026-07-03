@@ -24,7 +24,7 @@ app.innerHTML = `
       </h1>
     </div>
     <div class="hero-right">
-      <p>Share text. Quickly. Secure. Anonymous</p>
+      <p>Share text. Quickly. Secure. Anonymous.</p>
     </div>
   </header>
 
