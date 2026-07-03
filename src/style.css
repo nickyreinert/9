@@ -238,8 +238,9 @@ button:hover:not(:disabled) {
 
 .qr-hover canvas {
   display: block;
-  width: 220px;
-  height: 220px;
+  width: 220px !important;
+  height: 220px !important;
+  max-width: 100%;
   border-radius: 8px;
   background: #fff;
 }
