@@ -25,3 +25,19 @@ export async function submitAnswer(code, answer) {
   if (!res.ok) throw new Error('Could not submit the answer (code expired?)');
   return res.json();
 }
+
+export function deleteSession(code) {
+  // Fire-and-forget cleanup; the KV TTL is the backstop if this never lands.
+  return fetch(`${SIGNAL_URL}/session/${code}`, { method: 'DELETE' }).catch(() => {});
+}
+
+export async function fetchTurnServers() {
+  try {
+    const res = await fetch(`${SIGNAL_URL}/turn`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.iceServers) ? data.iceServers : [];
+  } catch {
+    return [];
+  }
+}

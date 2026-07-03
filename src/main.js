@@ -2,7 +2,8 @@ import './style.css';
 import { renderQr, createScanner } from './qr.js';
 import { createPeerConnection, waitForIceGatheringComplete } from './webrtc.js';
 import { compressSdp, decompressSdp } from './sdp.js';
-import { createSession, fetchSession, submitAnswer } from './signal.js';
+import { createSession, fetchSession, submitAnswer, deleteSession, fetchTurnServers } from './signal.js';
+import { sendFile, triggerDownload, MAX_FILE_SIZE } from './filetransfer.js';
 
 const app = document.querySelector('#app');
 
@@ -93,23 +94,31 @@ app.innerHTML = `
     </div>
 
     <label class="row-wifi checkbox">
-      <input type="checkbox" id="sameWifi" />
-      Same Wi-Fi (no STUN)
+      <input type="checkbox" id="sameWifi" checked />
+      Same Wi-Fi (no STUN/TURN)
       <span class="tooltip" id="wifiTooltip" tabindex="0">?
-        <span class="bubble">When unchecked, a public STUN server (Google's) helps the two devices
-          find each other across different networks. It only ever sees connection
-          metadata — never your shared text.</span>
+        <span class="bubble">Checked connects the two devices directly over the local network only —
+          the quickest, most anonymous option, with no external server involved at all. Uncheck it
+          if the devices aren't on the same network: a public STUN server (Google's) and TURN relay
+          (Cloudflare's) then help them find each other. They only ever see connection metadata —
+          never your shared text.</span>
       </span>
     </label>
   </div>
 
   <div class="panel text-panel">
-    <textarea id="sharedText" placeholder="Connect to start typing..." disabled></textarea>
+    <textarea id="sharedText" maxlength="50000" placeholder="Type here — it'll sync as soon as you're connected..."></textarea>
     <div class="text-controls">
       <label class="checkbox">
         <input type="checkbox" id="hiddenToggle" />
         Hidden
       </label>
+      <input type="file" id="fileInput" hidden />
+      <button id="fileBtn" class="icon-btn" type="button" title="Send a file" aria-label="Send a file">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <button id="copyBtn" class="icon-btn" type="button" title="Copy to clipboard" aria-label="Copy to clipboard">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="8" y="8" width="12" height="12" rx="2"/>
@@ -117,6 +126,7 @@ app.innerHTML = `
         </svg>
       </button>
     </div>
+    <div class="file-status hidden" id="fileStatus"></div>
   </div>
 
   <footer class="site-footer">
@@ -154,6 +164,9 @@ const wifiTooltip = el('wifiTooltip');
 const sharedText = el('sharedText');
 const hiddenToggle = el('hiddenToggle');
 const copyBtn = el('copyBtn');
+const fileBtn = el('fileBtn');
+const fileInput = el('fileInput');
+const fileStatus = el('fileStatus');
 
 const COPY_ICON = copyBtn.innerHTML;
 const CHECK_ICON =
@@ -162,6 +175,10 @@ const CHECK_ICON =
 wifiTooltip.addEventListener('click', (e) => e.preventDefault());
 
 const CODE_RE = /^\d{6}$/;
+// Matches the textarea's maxlength; also bounds what we accept from the peer
+// and keeps a full-text sync comfortably under the ~256KB DataChannel
+// message limit (past which send() errors and can kill the channel).
+const MAX_TEXT_LENGTH = 50000;
 
 const state = {
   mode: null, // 'host' | 'joiner'
@@ -171,10 +188,54 @@ const state = {
   pollTimer: null,
   scanner: null,
   hostCode: null,
+  pendingFile: null, // picked before a channel was open; sent as soon as one opens
+  sendingFile: false,
+  incomingFile: null, // { name, size, mime, chunks, received } while a receive is in progress
 };
 
 let debounceTimer = null;
 let revealTimer = null;
+
+// Fetched once and reused for every connection attempt — the TURN service
+// issues credentials valid for a day, far longer than a session. An empty
+// result (offline blip, or TURN simply not configured) isn't cached, so a
+// transient failure doesn't lock the whole page session out of TURN.
+let turnServersPromise = null;
+function getTurnServers() {
+  if (!turnServersPromise) {
+    turnServersPromise = fetchTurnServers().then((servers) => {
+      if (!servers.length) turnServersPromise = null;
+      return servers;
+    });
+  }
+  return turnServersPromise;
+}
+
+function safeSend(payload) {
+  if (!state.channel || state.channel.readyState !== 'open') return false;
+  try {
+    state.channel.send(payload);
+    return true;
+  } catch {
+    // channel closed between the check and the send — the onclose handler
+    // takes care of the UI, nothing to do here
+    return false;
+  }
+}
+
+let fileStatusTimer = null;
+function setFileStatus(text, autoHideMs = 0) {
+  clearTimeout(fileStatusTimer);
+  if (!text) {
+    fileStatus.classList.add('hidden');
+    return;
+  }
+  fileStatus.textContent = text;
+  fileStatus.classList.remove('hidden');
+  if (autoHideMs) {
+    fileStatusTimer = setTimeout(() => fileStatus.classList.add('hidden'), autoHideMs);
+  }
+}
 
 function flashReveal() {
   if (!hiddenToggle.checked) return;
@@ -191,7 +252,7 @@ function setStatus(text, cls) {
 }
 
 function stopPolling() {
-  clearInterval(state.pollTimer);
+  clearTimeout(state.pollTimer);
   state.pollTimer = null;
 }
 
@@ -223,34 +284,57 @@ function teardown() {
     state.pc = null;
   }
   state.hostCode = null;
-  sharedText.disabled = true;
+  state.sendingFile = false;
+  if (state.incomingFile) {
+    state.incomingFile = null;
+    setFileStatus(null);
+  }
 }
 
 function setupDataChannel(channel) {
+  channel.binaryType = 'arraybuffer';
   state.channel = channel;
+  // Every handler checks it still belongs to the live channel — after a
+  // reconnect, the old channel's close/error events fire late and would
+  // otherwise clobber the new connection's UI state.
   channel.onopen = () => {
+    if (state.channel !== channel) return;
     setStatus('Connected', 'connected');
-    sharedText.disabled = false;
     stopPolling();
     stopScanner();
     connectPanel.classList.add('hidden');
+    if (hiddenToggle.checked) sendHiddenState();
+    if (sharedText.value) safeSend(JSON.stringify({ type: 'text', value: sharedText.value }));
+    if (state.pendingFile) beginFileSend(state.pendingFile);
   };
   channel.onclose = () => {
+    if (state.channel !== channel) return;
     setStatus('Disconnected', '');
-    sharedText.disabled = true;
     connectPanel.classList.remove('hidden');
   };
   channel.onerror = () => {
+    if (state.channel !== channel) return;
     setStatus('Connection failed', 'failed');
   };
   channel.onmessage = (event) => {
+    if (state.channel !== channel) return;
+    if (typeof event.data !== 'string') {
+      receiveFileChunk(event.data);
+      return;
+    }
     try {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'text') {
+      if (msg.type === 'text' && typeof msg.value === 'string') {
         state.isRemoteUpdate = true;
-        sharedText.value = msg.value;
+        sharedText.value = msg.value.slice(0, MAX_TEXT_LENGTH);
         state.isRemoteUpdate = false;
         flashReveal();
+      } else if (msg.type === 'hidden') {
+        applyHiddenState(!!msg.value);
+      } else if (msg.type === 'file-start') {
+        startFileReceive(msg);
+      } else if (msg.type === 'file-end') {
+        finishFileReceive();
       }
     } catch {
       // ignore malformed messages
@@ -258,20 +342,85 @@ function setupDataChannel(channel) {
   };
 }
 
+function startFileReceive(msg) {
+  // The peer controls this metadata, so pin it down before trusting it:
+  // a bogus size would defeat the receive cap, and the name becomes the
+  // download filename.
+  const size = Number(msg.size);
+  if (!Number.isFinite(size) || size <= 0 || size > MAX_FILE_SIZE) return;
+  const name = String(msg.name || 'file').replace(/[/\\]/g, '_').slice(0, 200);
+  const mime = typeof msg.mime === 'string' ? msg.mime : 'application/octet-stream';
+  state.incomingFile = { name, size, mime, chunks: [], received: 0 };
+  setFileStatus(`Receiving "${name}"… 0%`);
+}
+
+function receiveFileChunk(data) {
+  const incoming = state.incomingFile;
+  if (!incoming) return;
+  incoming.received += data.byteLength;
+  if (incoming.received > incoming.size) {
+    // More bytes than announced — drop the transfer rather than buffer
+    // unbounded data in memory.
+    state.incomingFile = null;
+    setFileStatus('Incoming file aborted — it exceeded its announced size.', 5000);
+    return;
+  }
+  incoming.chunks.push(data);
+  setFileStatus(`Receiving "${incoming.name}"… ${Math.round((incoming.received / incoming.size) * 100)}%`);
+}
+
+function finishFileReceive() {
+  const incoming = state.incomingFile;
+  if (!incoming) return;
+  const blob = new Blob(incoming.chunks, { type: incoming.mime });
+  triggerDownload(blob, incoming.name);
+  setFileStatus(`Received "${incoming.name}".`, 3000);
+  state.incomingFile = null;
+}
+
+async function beginFileSend(file) {
+  if (state.sendingFile || !state.channel || state.channel.readyState !== 'open') return;
+  state.sendingFile = true;
+  setFileStatus(`Sending "${file.name}"… 0%`);
+  try {
+    await sendFile(state.channel, file, (sent, total) => {
+      setFileStatus(`Sending "${file.name}"… ${Math.round((sent / total) * 100)}%`);
+    });
+    setFileStatus(`Sent "${file.name}".`, 3000);
+  } catch {
+    setFileStatus(`Failed to send "${file.name}".`, 5000);
+  } finally {
+    state.sendingFile = false;
+    state.pendingFile = null;
+  }
+}
+
+function applyHiddenState(value) {
+  hiddenToggle.checked = value;
+  clearTimeout(revealTimer);
+  sharedText.classList.toggle('masked', value);
+}
+
+function sendHiddenState() {
+  safeSend(JSON.stringify({ type: 'hidden', value: hiddenToggle.checked }));
+}
+
 sharedText.addEventListener('input', () => {
   if (state.isRemoteUpdate) return;
   flashReveal();
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
-    if (state.channel && state.channel.readyState === 'open') {
-      state.channel.send(JSON.stringify({ type: 'text', value: sharedText.value }));
-    }
+    safeSend(JSON.stringify({ type: 'text', value: sharedText.value }));
   }, 75);
 });
 
 hiddenToggle.addEventListener('change', () => {
   clearTimeout(revealTimer);
   sharedText.classList.toggle('masked', hiddenToggle.checked);
+  sendHiddenState();
+  if (state.mode === 'host' && !(state.channel && state.channel.readyState === 'open')) {
+    startHost();
+  }
 });
 
 copyBtn.addEventListener('click', async () => {
@@ -286,6 +435,32 @@ copyBtn.addEventListener('click', async () => {
   }
 });
 
+fileBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (!file) return;
+
+  // fileStatus, not connectError — the connect panel (and any error inside
+  // it) is hidden once paired, exactly when this error is most likely.
+  if (file.size > MAX_FILE_SIZE) {
+    setFileStatus(`That file is too big — max ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB.`, 5000);
+    return;
+  }
+  if (state.sendingFile) {
+    setFileStatus('Still sending the previous file — try again once it finishes.', 5000);
+    return;
+  }
+
+  if (state.channel && state.channel.readyState === 'open') {
+    beginFileSend(file);
+  } else {
+    state.pendingFile = file;
+    setFileStatus(`"${file.name}" will send as soon as you're connected…`);
+  }
+});
+
 function wirePeerConnectionLifecycle(pc) {
   pc.onconnectionstatechange = () => {
     if (!state.pc || pc !== state.pc) return;
@@ -293,6 +468,11 @@ function wirePeerConnectionLifecycle(pc) {
       setStatus('Connecting…', 'connecting');
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       setStatus('Connection failed', 'failed');
+      if (sameWifiCheckbox.checked) {
+        connectError.textContent =
+          "Couldn't connect directly — if the devices aren't on the same network, uncheck \"Same Wi-Fi\" and try again.";
+        connectError.classList.remove('hidden');
+      }
     } else if (pc.connectionState === 'closed') {
       setStatus('Disconnected', '');
     }
@@ -303,6 +483,8 @@ function codeUrl(code, compressedOffer) {
   const url = new URL(location.pathname, location.origin);
   url.searchParams.set('code', code);
   url.searchParams.set('offer', compressedOffer);
+  if (sameWifiCheckbox.checked) url.searchParams.set('wifi', '1');
+  if (hiddenToggle.checked) url.searchParams.set('hidden', '1');
   return url.toString();
 }
 
@@ -313,7 +495,10 @@ async function startHost() {
   qrTooltipUrl.textContent = '';
   setStatus('Waiting for a peer…', 'connecting');
 
-  const pc = createPeerConnection(sameWifiCheckbox.checked);
+  const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+  if (state.mode !== 'host') return; // superseded while fetching TURN credentials
+
+  const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
   state.pc = pc;
   wirePeerConnectionLifecycle(pc);
   setupDataChannel(pc.createDataChannel('text'));
@@ -337,31 +522,40 @@ async function startHost() {
   hostCodeText.textContent = code;
   const url = codeUrl(code, compressedOffer);
   qrTooltipUrl.textContent = url;
-  await renderQr(hostCanvas, url);
+  try {
+    await renderQr(hostCanvas, url);
+  } catch {
+    // offer too dense for a QR (can happen with many ICE candidates) —
+    // the 6-digit code path still works, so don't fail the whole host setup
+  }
 
   pollForAnswer(pc, code);
 }
 
 function pollForAnswer(pc, code) {
   stopPolling();
-  state.pollTimer = setInterval(async () => {
-    if (state.pc !== pc || state.hostCode !== code) {
-      stopPolling();
-      return;
-    }
+  // setTimeout chain rather than setInterval, so a slow fetch can't overlap
+  // the next tick and double-apply the answer.
+  const poll = async () => {
+    if (state.pc !== pc || state.hostCode !== code) return;
     try {
       const session = await fetchSession(code);
       if (session && session.answer && state.pc === pc) {
-        stopPolling();
         await pc.setRemoteDescription({ type: 'answer', sdp: decompressSdp(session.answer) });
+        deleteSession(code); // handshake consumed — remove it from the relay right away
+        return;
       }
     } catch {
       // transient network error, keep polling
     }
-  }, 1500);
+    if (state.pc === pc && state.hostCode === code) {
+      state.pollTimer = setTimeout(poll, 1500);
+    }
+  };
+  state.pollTimer = setTimeout(poll, 1500);
 }
 
-async function joinWithCode(code, embeddedOffer) {
+async function joinWithCode(code, embeddedOffer, presetOpts) {
   await stopScanner();
   connectError.classList.add('hidden');
 
@@ -369,6 +563,11 @@ async function joinWithCode(code, embeddedOffer) {
     connectError.textContent = 'That code looks invalid — it should be 6 digits.';
     connectError.classList.remove('hidden');
     return;
+  }
+
+  if (presetOpts) {
+    sameWifiCheckbox.checked = !!presetOpts.wifi;
+    applyHiddenState(!!presetOpts.hidden);
   }
 
   teardown();
@@ -386,7 +585,8 @@ async function joinWithCode(code, embeddedOffer) {
       offerSdp = decompressSdp(session.offer);
     }
 
-    const pc = createPeerConnection(sameWifiCheckbox.checked);
+    const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+    const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
     state.pc = pc;
     wirePeerConnectionLifecycle(pc);
     pc.ondatachannel = (event) => setupDataChannel(event.channel);
@@ -413,33 +613,49 @@ function parseScannedPayload(raw) {
     const u = new URL(trimmed);
     const code = u.searchParams.get('code');
     const offer = u.searchParams.get('offer');
-    if (code && CODE_RE.test(code)) return { code, offer: offer || null };
+    if (code && CODE_RE.test(code)) {
+      return {
+        code,
+        offer: offer || null,
+        wifi: u.searchParams.get('wifi') === '1',
+        hidden: u.searchParams.get('hidden') === '1',
+      };
+    }
   } catch {
     // not a URL
   }
   return null;
 }
 
+// Guards against a double-tap racing two getUserMedia calls — the first
+// stream would be orphaned with its tracks still live (camera stays on).
+let cameraBusy = false;
 cameraToggleBtn.addEventListener('click', async () => {
-  const opening = cameraPanel.classList.contains('hidden');
-  connectError.classList.add('hidden');
-  if (opening) {
-    showSlot('camera');
-    try {
-      const scanner = createScanner(scanVideo, (data) => {
-        const parsed = parseScannedPayload(data);
-        if (parsed) joinWithCode(parsed.code, parsed.offer);
-      });
-      state.scanner = scanner;
-      await scanner.start();
-    } catch {
+  if (cameraBusy) return;
+  cameraBusy = true;
+  try {
+    const opening = cameraPanel.classList.contains('hidden');
+    connectError.classList.add('hidden');
+    if (opening) {
+      showSlot('camera');
+      try {
+        const scanner = await createScanner(scanVideo, (data) => {
+          const parsed = parseScannedPayload(data);
+          if (parsed) joinWithCode(parsed.code, parsed.offer, { wifi: parsed.wifi, hidden: parsed.hidden });
+        });
+        state.scanner = scanner;
+        await scanner.start();
+      } catch {
+        showSlot('qr');
+        connectError.textContent = 'Camera unavailable — enter the code instead.';
+        connectError.classList.remove('hidden');
+      }
+    } else {
+      await stopScanner();
       showSlot('qr');
-      connectError.textContent = 'Camera unavailable — enter the code instead.';
-      connectError.classList.remove('hidden');
     }
-  } else {
-    await stopScanner();
-    showSlot('qr');
+  } finally {
+    cameraBusy = false;
   }
 });
 
@@ -480,7 +696,10 @@ sameWifiCheckbox.addEventListener('change', () => {
 const initialParams = new URLSearchParams(location.search);
 const initialCode = initialParams.get('code');
 if (initialCode && CODE_RE.test(initialCode)) {
-  joinWithCode(initialCode, initialParams.get('offer'));
+  joinWithCode(initialCode, initialParams.get('offer'), {
+    wifi: initialParams.get('wifi') === '1',
+    hidden: initialParams.get('hidden') === '1',
+  });
 } else {
   startHost();
 }

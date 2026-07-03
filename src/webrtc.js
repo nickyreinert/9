@@ -1,7 +1,7 @@
-export function createPeerConnection(sameWifi) {
+export function createPeerConnection(sameWifi, turnServers = []) {
   const config = sameWifi
     ? { iceServers: [] }
-    : { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    : { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...turnServers] };
   return new RTCPeerConnection(config);
 }
 
