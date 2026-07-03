@@ -478,7 +478,7 @@ cameraToggleBtn.addEventListener('click', async () => {
   if (opening) {
     showSlot('camera');
     try {
-      const scanner = createScanner(scanVideo, (data) => {
+      const scanner = await createScanner(scanVideo, (data) => {
         const parsed = parseScannedPayload(data);
         if (parsed) joinWithCode(parsed.code, parsed.offer, { wifi: parsed.wifi, hidden: parsed.hidden });
       });
