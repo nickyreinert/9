@@ -204,6 +204,41 @@ body {
   background: var(--bad);
 }
 
+.status-detail {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-top: -6px;
+}
+
+.status-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--panel-border);
+  overflow: hidden;
+}
+
+.status-progress > div {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.status-progress.indeterminate > div {
+  width: 40% !important;
+  animation: status-progress-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes status-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
 .status-text {
   font-weight: 600;
 }
