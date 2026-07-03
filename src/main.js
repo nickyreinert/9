@@ -7,9 +7,18 @@ import { createSession, fetchSession, submitAnswer } from './signal.js';
 const app = document.querySelector('#app');
 
 app.innerHTML = `
-  <header>
-    <h1>QR P2P Text Share</h1>
-    <p>Open on two devices. One shows a code, the other clicks Connect — no server sees your text.</p>
+  <header class="hero">
+    <div class="hero-left">
+      <div class="dots" aria-hidden="true">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+      <h1>9</h1>
+    </div>
+    <div class="hero-right">
+      <p>Share text. Quickly. Secure. Anonymous</p>
+    </div>
   </header>
 
   <div class="panel connect-panel">
@@ -58,6 +67,12 @@ app.innerHTML = `
   <div class="panel">
     <textarea id="sharedText" placeholder="Connect to start typing..." disabled></textarea>
   </div>
+
+  <footer class="site-footer">
+    <span>Powered by <a href="https://institut-fdh.de" target="_blank" rel="noopener noreferrer">Institut für digitale Herausforderung</a></span>
+    <span class="footer-sep">·</span>
+    <a href="https://9000.1-1-1.de/" target="_blank" rel="noopener noreferrer">HTTP Mirror</a>
+  </footer>
 `;
 
 const el = (id) => document.getElementById(id);

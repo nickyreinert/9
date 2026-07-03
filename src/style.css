@@ -9,6 +9,7 @@
   --warn: #fbbf24;
   --bad: #f87171;
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --technical: 'JetBrains Mono', 'IBM Plex Mono', 'Space Mono', ui-monospace, var(--mono);
   color-scheme: dark;
 }
 
@@ -30,20 +31,55 @@ body {
   padding: 24px 16px 64px;
 }
 
-header {
-  text-align: center;
-  margin-bottom: 20px;
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
-header h1 {
-  font-size: 1.4rem;
-  margin: 0 0 4px;
+.hero-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
 }
 
-header p {
+.dots {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.hero-left h1 {
+  font-family: var(--technical);
+  font-size: 3.2rem;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.hero-right {
+  flex: 1;
+  min-width: 180px;
+}
+
+.hero-right p {
+  font-family: var(--technical);
   color: var(--text-dim);
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
 
 .panel {
@@ -274,4 +310,32 @@ label.checkbox {
   color: var(--bad);
   font-size: 0.85rem;
   margin-top: 8px;
+}
+
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.site-footer a {
+  color: var(--text-dim);
+  text-decoration: underline;
+  text-decoration-color: var(--panel-border);
+  text-underline-offset: 2px;
+}
+
+.site-footer a:hover {
+  color: var(--text);
+  text-decoration-color: var(--text-dim);
+}
+
+.footer-sep {
+  opacity: 0.5;
 }
