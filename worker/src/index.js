@@ -1,10 +1,13 @@
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
 const TTL_SECONDS = 600;
+// Compressed SDP offers/answers are ~1-2KB; anything much larger is abuse.
+const MAX_PAYLOAD_LENGTH = 32 * 1024;
+const CODE_RE = /^\d{6}$/;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -14,7 +17,10 @@ function json(data, status = 200) {
 }
 
 function randomCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  // crypto-random so active codes can't be predicted from previous ones.
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return String(100000 + (buf[0] % 900000));
 }
 
 async function allocateCode(sessions) {
@@ -80,7 +86,7 @@ export default {
       } catch {
         return json({ error: 'invalid json' }, 400);
       }
-      if (!body || typeof body.offer !== 'string') {
+      if (!body || typeof body.offer !== 'string' || body.offer.length > MAX_PAYLOAD_LENGTH) {
         return json({ error: 'offer required' }, 400);
       }
 
@@ -93,23 +99,35 @@ export default {
       return json({ code });
     }
 
+    // Everything below addresses a specific session by code.
+    const code = parts[1];
+    if (parts.length >= 2 && !CODE_RE.test(code)) {
+      return json({ error: 'not found' }, 404);
+    }
+
     // GET /session/:code -> { offer, answer }
     if (request.method === 'GET' && parts.length === 2) {
-      const raw = await env.SESSIONS.get(parts[1]);
+      const raw = await env.SESSIONS.get(code);
       if (!raw) return json({ error: 'not found' }, 404);
       return json(JSON.parse(raw));
     }
 
+    // DELETE /session/:code — the host calls this once it has consumed the
+    // answer, so the handshake blob doesn't linger in KV for the full TTL.
+    if (request.method === 'DELETE' && parts.length === 2) {
+      await env.SESSIONS.delete(code);
+      return json({ ok: true });
+    }
+
     // POST /session/:code/answer  { answer } -> { ok }
     if (request.method === 'POST' && parts.length === 3 && parts[2] === 'answer') {
-      const code = parts[1];
       let body;
       try {
         body = await request.json();
       } catch {
         return json({ error: 'invalid json' }, 400);
       }
-      if (!body || typeof body.answer !== 'string') {
+      if (!body || typeof body.answer !== 'string' || body.answer.length > MAX_PAYLOAD_LENGTH) {
         return json({ error: 'answer required' }, 400);
       }
 
