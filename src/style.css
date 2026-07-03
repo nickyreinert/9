@@ -152,6 +152,19 @@ body {
   margin-bottom: 0;
 }
 
+.connect-body > * {
+  margin-bottom: 14px;
+}
+
+.connect-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.connect-panel.collapsed .connect-body,
+.connect-panel.collapsed .error-msg {
+  display: none;
+}
+
 .row-status {
   display: flex;
   align-items: center;
@@ -161,6 +174,14 @@ body {
 
 .row-status .status-text {
   flex: 1;
+}
+
+#collapseToggleBtn svg {
+  transition: transform 0.15s ease;
+}
+
+.connect-panel.collapsed #collapseToggleBtn svg {
+  transform: rotate(-90deg);
 }
 
 .status-dot {
