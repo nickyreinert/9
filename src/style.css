@@ -98,22 +98,14 @@ body {
   margin-bottom: 16px;
 }
 
-.row {
+.row-status {
   display: flex;
   align-items: center;
-  margin-bottom: 14px;
-}
-
-.row:last-child {
-  margin-bottom: 0;
-}
-
-.status-row {
   gap: 8px;
   font-size: 0.9rem;
 }
 
-.status-row .status-text {
+.row-status .status-text {
   flex: 1;
 }
 
@@ -177,10 +169,12 @@ button:hover:not(:disabled) {
   border-color: var(--text-dim);
 }
 
-/* ---- connect block ---- */
+/* ---- connect block: each row is its own stacked card ---- */
 
-.qr-row {
-  gap: 14px;
+.row-qr {
+  display: flex;
+  justify-content: center;
+  padding: 20px;
 }
 
 .qr-hover {
@@ -190,26 +184,28 @@ button:hover:not(:disabled) {
 
 .qr-hover canvas {
   display: block;
-  width: 96px;
-  height: 96px;
-  border-radius: 6px;
+  width: 220px;
+  height: 220px;
+  border-radius: 8px;
   background: #fff;
 }
 
 .big-code {
   font-family: var(--mono);
-  font-size: 1.6rem;
+  font-size: 1.8rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   color: var(--text);
-  flex-shrink: 0;
+  text-align: center;
+  margin: -4px 0 16px;
 }
 
-.join-controls {
+.row-join {
+  display: flex;
   gap: 8px;
 }
 
-.join-controls input {
+.row-join input {
   flex: 1;
   min-width: 0;
   background: #0b0d12;
@@ -228,10 +224,13 @@ video {
   max-width: 280px;
   border-radius: 8px;
   background: #000;
-  margin-bottom: 14px;
+  margin: 0 auto 16px;
+  display: block;
 }
 
-label.checkbox {
+label.row-wifi.checkbox {
+  display: flex;
+  align-items: center;
   gap: 4px;
   color: var(--text-dim);
   font-size: 0.85rem;
@@ -319,7 +318,8 @@ label.checkbox {
 .error-msg {
   color: var(--bad);
   font-size: 0.85rem;
-  margin-top: 8px;
+  text-align: center;
+  margin: 8px 0 16px;
 }
 
 .site-footer {
