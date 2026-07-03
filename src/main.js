@@ -234,6 +234,7 @@ function setupDataChannel(channel) {
     stopPolling();
     stopScanner();
     connectPanel.classList.add('hidden');
+    if (hiddenToggle.checked) sendHiddenState();
   };
   channel.onclose = () => {
     setStatus('Disconnected', '');
@@ -251,11 +252,25 @@ function setupDataChannel(channel) {
         sharedText.value = msg.value;
         state.isRemoteUpdate = false;
         flashReveal();
+      } else if (msg.type === 'hidden') {
+        applyHiddenState(msg.value);
       }
     } catch {
       // ignore malformed messages
     }
   };
+}
+
+function applyHiddenState(value) {
+  hiddenToggle.checked = value;
+  clearTimeout(revealTimer);
+  sharedText.classList.toggle('masked', value);
+}
+
+function sendHiddenState() {
+  if (state.channel && state.channel.readyState === 'open') {
+    state.channel.send(JSON.stringify({ type: 'hidden', value: hiddenToggle.checked }));
+  }
 }
 
 sharedText.addEventListener('input', () => {
@@ -272,6 +287,10 @@ sharedText.addEventListener('input', () => {
 hiddenToggle.addEventListener('change', () => {
   clearTimeout(revealTimer);
   sharedText.classList.toggle('masked', hiddenToggle.checked);
+  sendHiddenState();
+  if (state.mode === 'host' && !(state.channel && state.channel.readyState === 'open')) {
+    startHost();
+  }
 });
 
 copyBtn.addEventListener('click', async () => {
@@ -303,6 +322,8 @@ function codeUrl(code, compressedOffer) {
   const url = new URL(location.pathname, location.origin);
   url.searchParams.set('code', code);
   url.searchParams.set('offer', compressedOffer);
+  if (sameWifiCheckbox.checked) url.searchParams.set('wifi', '1');
+  if (hiddenToggle.checked) url.searchParams.set('hidden', '1');
   return url.toString();
 }
 
@@ -361,7 +382,7 @@ function pollForAnswer(pc, code) {
   }, 1500);
 }
 
-async function joinWithCode(code, embeddedOffer) {
+async function joinWithCode(code, embeddedOffer, presetOpts) {
   await stopScanner();
   connectError.classList.add('hidden');
 
@@ -369,6 +390,11 @@ async function joinWithCode(code, embeddedOffer) {
     connectError.textContent = 'That code looks invalid — it should be 6 digits.';
     connectError.classList.remove('hidden');
     return;
+  }
+
+  if (presetOpts) {
+    sameWifiCheckbox.checked = !!presetOpts.wifi;
+    applyHiddenState(!!presetOpts.hidden);
   }
 
   teardown();
@@ -413,7 +439,14 @@ function parseScannedPayload(raw) {
     const u = new URL(trimmed);
     const code = u.searchParams.get('code');
     const offer = u.searchParams.get('offer');
-    if (code && CODE_RE.test(code)) return { code, offer: offer || null };
+    if (code && CODE_RE.test(code)) {
+      return {
+        code,
+        offer: offer || null,
+        wifi: u.searchParams.get('wifi') === '1',
+        hidden: u.searchParams.get('hidden') === '1',
+      };
+    }
   } catch {
     // not a URL
   }
@@ -428,7 +461,7 @@ cameraToggleBtn.addEventListener('click', async () => {
     try {
       const scanner = createScanner(scanVideo, (data) => {
         const parsed = parseScannedPayload(data);
-        if (parsed) joinWithCode(parsed.code, parsed.offer);
+        if (parsed) joinWithCode(parsed.code, parsed.offer, { wifi: parsed.wifi, hidden: parsed.hidden });
       });
       state.scanner = scanner;
       await scanner.start();
@@ -480,7 +513,10 @@ sameWifiCheckbox.addEventListener('change', () => {
 const initialParams = new URLSearchParams(location.search);
 const initialCode = initialParams.get('code');
 if (initialCode && CODE_RE.test(initialCode)) {
-  joinWithCode(initialCode, initialParams.get('offer'));
+  joinWithCode(initialCode, initialParams.get('offer'), {
+    wifi: initialParams.get('wifi') === '1',
+    hidden: initialParams.get('hidden') === '1',
+  });
 } else {
   startHost();
 }
