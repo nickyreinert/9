@@ -46,6 +46,9 @@ app.innerHTML = `
       </button>
     </div>
 
+    <div class="status-detail hidden" id="statusDetail"></div>
+    <div class="status-progress hidden" id="statusProgress"><div></div></div>
+
     <div class="error-msg hidden" id="connectError"></div>
 
     <div class="connect-body" id="connectBody">
@@ -134,6 +137,7 @@ app.innerHTML = `
       </button>
     </div>
     <div class="file-status hidden" id="fileStatus"></div>
+    <div class="status-progress hidden" id="fileProgress"><div></div></div>
   </div>
 
   <footer class="site-footer">
@@ -149,6 +153,8 @@ const el = (id) => document.getElementById(id);
 
 const statusDot = el('statusDot');
 const statusText = el('statusText');
+const statusDetail = el('statusDetail');
+const statusProgress = el('statusProgress');
 const sameWifiCheckbox = el('sameWifi');
 
 const hostCanvas = el('hostCanvas');
@@ -175,6 +181,7 @@ const copyBtn = el('copyBtn');
 const fileBtn = el('fileBtn');
 const fileInput = el('fileInput');
 const fileStatus = el('fileStatus');
+const fileProgress = el('fileProgress');
 
 const COPY_ICON = copyBtn.innerHTML;
 const CHECK_ICON =
@@ -232,16 +239,26 @@ function safeSend(payload) {
 }
 
 let fileStatusTimer = null;
-function setFileStatus(text, autoHideMs = 0) {
+function setFileStatus(text, autoHideMs = 0, percent = null) {
   clearTimeout(fileStatusTimer);
   if (!text) {
     fileStatus.classList.add('hidden');
+    fileProgress.classList.add('hidden');
     return;
   }
   fileStatus.textContent = text;
   fileStatus.classList.remove('hidden');
+  if (percent === null) {
+    fileProgress.classList.add('hidden');
+  } else {
+    fileProgress.classList.remove('hidden');
+    fileProgress.firstElementChild.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  }
   if (autoHideMs) {
-    fileStatusTimer = setTimeout(() => fileStatus.classList.add('hidden'), autoHideMs);
+    fileStatusTimer = setTimeout(() => {
+      fileStatus.classList.add('hidden');
+      fileProgress.classList.add('hidden');
+    }, autoHideMs);
   }
 }
 
@@ -254,9 +271,15 @@ function flashReveal() {
   }, 900);
 }
 
-function setStatus(text, cls) {
+function setStatus(text, cls, detail) {
   statusText.textContent = text;
   statusDot.className = 'status-dot' + (cls ? ' ' + cls : '');
+  statusDetail.textContent = detail || '';
+  statusDetail.classList.toggle('hidden', !detail);
+  // Indeterminate while anything is in flight — there's no real percentage
+  // for ICE gathering / signaling, so this just signals "still working."
+  statusProgress.classList.toggle('hidden', cls !== 'connecting');
+  statusProgress.classList.toggle('indeterminate', cls === 'connecting');
 }
 
 function stopPolling() {
@@ -299,6 +322,38 @@ function teardown() {
   }
 }
 
+// Once connected, ask WebRTC which candidate pair actually won so the
+// status line can say plainly whether Cloudflare's TURN relay is carrying
+// the (still end-to-end encrypted) traffic, or the link is direct.
+async function describeConnectionPath(pc) {
+  if (!pc) return null;
+  try {
+    const stats = await pc.getStats();
+    let pair = null;
+    for (const report of stats.values()) {
+      if (report.type === 'transport' && report.selectedCandidatePairId) {
+        pair = stats.get(report.selectedCandidatePairId);
+        break;
+      }
+    }
+    if (!pair) {
+      for (const report of stats.values()) {
+        if (report.type === 'candidate-pair' && report.nominated && report.state === 'succeeded') {
+          pair = report;
+          break;
+        }
+      }
+    }
+    if (!pair) return null;
+    const local = stats.get(pair.localCandidateId);
+    const remote = stats.get(pair.remoteCandidateId);
+    const relayed = local?.candidateType === 'relay' || remote?.candidateType === 'relay';
+    return relayed ? 'Relayed via Cloudflare TURN' : 'Direct connection';
+  } catch {
+    return null;
+  }
+}
+
 function setupDataChannel(channel) {
   channel.binaryType = 'arraybuffer';
   state.channel = channel;
@@ -314,6 +369,13 @@ function setupDataChannel(channel) {
     if (hiddenToggle.checked) sendHiddenState();
     if (sharedText.value) safeSend(JSON.stringify({ type: 'text', value: sharedText.value }));
     if (state.pendingFile) beginFileSend(state.pendingFile);
+    const pcAtOpen = state.pc;
+    describeConnectionPath(pcAtOpen).then((detail) => {
+      if (state.channel === channel && state.pc === pcAtOpen && detail) {
+        statusDetail.textContent = detail;
+        statusDetail.classList.remove('hidden');
+      }
+    });
   };
   channel.onclose = () => {
     if (state.channel !== channel) return;
@@ -359,7 +421,7 @@ function startFileReceive(msg) {
   const name = String(msg.name || 'file').replace(/[/\\]/g, '_').slice(0, 200);
   const mime = typeof msg.mime === 'string' ? msg.mime : 'application/octet-stream';
   state.incomingFile = { name, size, mime, chunks: [], received: 0 };
-  setFileStatus(`Receiving "${name}"… 0%`);
+  setFileStatus(`Receiving "${name}"… 0%`, 0, 0);
 }
 
 function receiveFileChunk(data) {
@@ -374,7 +436,8 @@ function receiveFileChunk(data) {
     return;
   }
   incoming.chunks.push(data);
-  setFileStatus(`Receiving "${incoming.name}"… ${Math.round((incoming.received / incoming.size) * 100)}%`);
+  const percent = Math.round((incoming.received / incoming.size) * 100);
+  setFileStatus(`Receiving "${incoming.name}"… ${percent}%`, 0, percent);
 }
 
 function finishFileReceive() {
@@ -389,10 +452,11 @@ function finishFileReceive() {
 async function beginFileSend(file) {
   if (state.sendingFile || !state.channel || state.channel.readyState !== 'open') return;
   state.sendingFile = true;
-  setFileStatus(`Sending "${file.name}"… 0%`);
+  setFileStatus(`Sending "${file.name}"… 0%`, 0, 0);
   try {
     await sendFile(state.channel, file, (sent, total) => {
-      setFileStatus(`Sending "${file.name}"… ${Math.round((sent / total) * 100)}%`);
+      const percent = Math.round((sent / total) * 100);
+      setFileStatus(`Sending "${file.name}"… ${percent}%`, 0, percent);
     });
     setFileStatus(`Sent "${file.name}".`, 3000);
   } catch {
@@ -473,7 +537,13 @@ function wirePeerConnectionLifecycle(pc) {
   pc.onconnectionstatechange = () => {
     if (!state.pc || pc !== state.pc) return;
     if (pc.connectionState === 'connecting') {
-      setStatus('Connecting…', 'connecting');
+      setStatus(
+        'Connecting…',
+        'connecting',
+        sameWifiCheckbox.checked
+          ? 'Trying local network only'
+          : 'Trying local network, Google STUN, Cloudflare TURN'
+      );
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       setStatus('Connection failed', 'failed');
       if (sameWifiCheckbox.checked) {
@@ -501,7 +571,7 @@ async function startHost() {
   state.mode = 'host';
   hostCodeText.textContent = '------';
   qrTooltipUrl.textContent = '';
-  setStatus('Waiting for a peer…', 'connecting');
+  setStatus('Preparing…', 'connecting', 'Gathering connection candidates');
 
   const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
   if (state.mode !== 'host') return; // superseded while fetching TURN credentials
@@ -514,7 +584,9 @@ async function startHost() {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   await waitForIceGatheringComplete(pc);
+  if (state.mode !== 'host' || state.pc !== pc) return; // superseded
 
+  setStatus('Registering…', 'connecting', 'Handshake via Cloudflare');
   const compressedOffer = compressSdp(pc.localDescription.sdp);
 
   let code;
@@ -525,6 +597,8 @@ async function startHost() {
     return;
   }
   if (state.mode !== 'host' || state.pc !== pc) return; // superseded
+
+  setStatus('Waiting for a peer…', 'connecting', 'Polling Cloudflare relay');
 
   state.hostCode = code;
   hostCodeText.textContent = code;
@@ -580,14 +654,15 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
 
   teardown();
   state.mode = 'joiner';
-  setStatus('Connecting…', 'connecting');
 
   try {
     let offerSdp;
     if (embeddedOffer) {
       // Offer came straight from the QR — no Cloudflare fetch needed for it.
+      setStatus('Preparing…', 'connecting', 'Reading offer from link');
       offerSdp = decompressSdp(embeddedOffer);
     } else {
+      setStatus('Preparing…', 'connecting', 'Fetching handshake via Cloudflare');
       const session = await fetchSession(code);
       if (!session) throw new Error('Code not found or expired');
       offerSdp = decompressSdp(session.offer);
@@ -606,6 +681,7 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
 
     // The answer still relays back through Cloudflare either way — it's a
     // small, one-time blob and the host is already polling for it there.
+    setStatus('Registering…', 'connecting', 'Sending handshake via Cloudflare');
     await submitAnswer(code, compressSdp(pc.localDescription.sdp));
   } catch (err) {
     connectError.textContent = err.message;
