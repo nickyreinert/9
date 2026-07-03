@@ -39,71 +39,78 @@ app.innerHTML = `
           <rect x="9" y="9" width="6" height="6" rx="1"/>
         </svg>
       </button>
+      <button id="collapseToggleBtn" class="icon-btn" title="Expand/collapse" aria-label="Expand or collapse connect panel">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
 
     <div class="error-msg hidden" id="connectError"></div>
 
-    <div class="row-qr" id="qrPanel">
-      <div class="qr-hover" tabindex="0">
-        <canvas id="hostCanvas"></canvas>
-        <div class="bubble qr-bubble">
-          <strong>Your code</strong> — scan to connect. Encodes:
-          <div class="bubble-url" id="qrTooltipUrl"></div>
+    <div class="connect-body" id="connectBody">
+      <div class="row-qr" id="qrPanel">
+        <div class="qr-hover" tabindex="0">
+          <canvas id="hostCanvas"></canvas>
+          <div class="bubble qr-bubble">
+            <strong>Your code</strong> — scan to connect. Encodes:
+            <div class="bubble-url" id="qrTooltipUrl"></div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="row-qr hidden" id="numpadPanel">
-      <div class="numpad">
-        <button type="button" class="numpad-key" data-digit="1">1</button>
-        <button type="button" class="numpad-key" data-digit="2">2</button>
-        <button type="button" class="numpad-key" data-digit="3">3</button>
-        <button type="button" class="numpad-key" data-digit="4">4</button>
-        <button type="button" class="numpad-key" data-digit="5">5</button>
-        <button type="button" class="numpad-key" data-digit="6">6</button>
-        <button type="button" class="numpad-key" data-digit="7">7</button>
-        <button type="button" class="numpad-key" data-digit="8">8</button>
-        <button type="button" class="numpad-key" data-digit="9">9</button>
-        <button type="button" class="numpad-key numpad-clear" id="numpadClear">⌫</button>
-        <button type="button" class="numpad-key" data-digit="0">0</button>
-        <div></div>
+      <div class="row-qr hidden" id="numpadPanel">
+        <div class="numpad">
+          <button type="button" class="numpad-key" data-digit="1">1</button>
+          <button type="button" class="numpad-key" data-digit="2">2</button>
+          <button type="button" class="numpad-key" data-digit="3">3</button>
+          <button type="button" class="numpad-key" data-digit="4">4</button>
+          <button type="button" class="numpad-key" data-digit="5">5</button>
+          <button type="button" class="numpad-key" data-digit="6">6</button>
+          <button type="button" class="numpad-key" data-digit="7">7</button>
+          <button type="button" class="numpad-key" data-digit="8">8</button>
+          <button type="button" class="numpad-key" data-digit="9">9</button>
+          <button type="button" class="numpad-key numpad-clear" id="numpadClear">⌫</button>
+          <button type="button" class="numpad-key" data-digit="0">0</button>
+          <div></div>
+        </div>
       </div>
+
+      <div class="row-qr hidden" id="cameraPanel">
+        <video id="scanVideo" muted playsinline></video>
+      </div>
+
+      <div class="big-code" id="hostCodeText">------</div>
+
+      <div class="row-join">
+        <button id="numpadToggleBtn" class="icon-btn" title="Enter code with an on-screen keypad" aria-label="Toggle on-screen keypad">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+            <path d="M8 9h.01M12 9h.01M16 9h.01M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
+        <button id="joinCodeBtn">Connect</button>
+        <span class="tooltip" id="codeTooltip" tabindex="0">?
+          <span class="bubble">However you enter it — QR scan, keypad, or typing — connecting
+            always briefly relays a one-time handshake through a small Cloudflare
+            service so the two devices can find each other. Your shared text itself
+            never passes through it and stays directly peer-to-peer.</span>
+        </span>
+      </div>
+
+      <label class="row-wifi checkbox">
+        <input type="checkbox" id="sameWifi" checked />
+        Same Wi-Fi (no STUN/TURN)
+        <span class="tooltip" id="wifiTooltip" tabindex="0">?
+          <span class="bubble">Checked connects the two devices directly over the local network only —
+            the quickest, most anonymous option, with no external server involved at all. Uncheck it
+            if the devices aren't on the same network: a public STUN server (Google's) and TURN relay
+            (Cloudflare's) then help them find each other. They only ever see connection metadata —
+            never your shared text.</span>
+        </span>
+      </label>
     </div>
-
-    <div class="row-qr hidden" id="cameraPanel">
-      <video id="scanVideo" muted playsinline></video>
-    </div>
-
-    <div class="big-code" id="hostCodeText">------</div>
-
-    <div class="row-join">
-      <button id="numpadToggleBtn" class="icon-btn" title="Enter code with an on-screen keypad" aria-label="Toggle on-screen keypad">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="4" y="4" width="16" height="16" rx="2"/>
-          <path d="M8 9h.01M12 9h.01M16 9h.01M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
-      <button id="joinCodeBtn">Connect</button>
-      <span class="tooltip" id="codeTooltip" tabindex="0">?
-        <span class="bubble">However you enter it — QR scan, keypad, or typing — connecting
-          always briefly relays a one-time handshake through a small Cloudflare
-          service so the two devices can find each other. Your shared text itself
-          never passes through it and stays directly peer-to-peer.</span>
-      </span>
-    </div>
-
-    <label class="row-wifi checkbox">
-      <input type="checkbox" id="sameWifi" checked />
-      Same Wi-Fi (no STUN/TURN)
-      <span class="tooltip" id="wifiTooltip" tabindex="0">?
-        <span class="bubble">Checked connects the two devices directly over the local network only —
-          the quickest, most anonymous option, with no external server involved at all. Uncheck it
-          if the devices aren't on the same network: a public STUN server (Google's) and TURN relay
-          (Cloudflare's) then help them find each other. They only ever see connection metadata —
-          never your shared text.</span>
-      </span>
-    </label>
   </div>
 
   <div class="panel text-panel">
@@ -159,6 +166,7 @@ const numpadPanel = el('numpadPanel');
 const cameraPanel = el('cameraPanel');
 const numpadToggleBtn = el('numpadToggleBtn');
 const connectPanel = el('connectPanel');
+const collapseToggleBtn = el('collapseToggleBtn');
 const wifiTooltip = el('wifiTooltip');
 
 const sharedText = el('sharedText');
@@ -274,7 +282,7 @@ function teardown() {
   stopPolling();
   stopScanner();
   showSlot('qr');
-  connectPanel.classList.remove('hidden');
+  connectPanel.classList.remove('collapsed');
   if (state.channel) {
     state.channel.close();
     state.channel = null;
@@ -302,7 +310,7 @@ function setupDataChannel(channel) {
     setStatus('Connected', 'connected');
     stopPolling();
     stopScanner();
-    connectPanel.classList.add('hidden');
+    connectPanel.classList.add('collapsed');
     if (hiddenToggle.checked) sendHiddenState();
     if (sharedText.value) safeSend(JSON.stringify({ type: 'text', value: sharedText.value }));
     if (state.pendingFile) beginFileSend(state.pendingFile);
@@ -310,7 +318,7 @@ function setupDataChannel(channel) {
   channel.onclose = () => {
     if (state.channel !== channel) return;
     setStatus('Disconnected', '');
-    connectPanel.classList.remove('hidden');
+    connectPanel.classList.remove('collapsed');
   };
   channel.onerror = () => {
     if (state.channel !== channel) return;
@@ -693,13 +701,35 @@ sameWifiCheckbox.addEventListener('change', () => {
   }
 });
 
+collapseToggleBtn.addEventListener('click', () => {
+  const collapsed = connectPanel.classList.toggle('collapsed');
+  // Expanding while already connected means "pair a different device" —
+  // the panel's old QR/code are for a session that's already paired and
+  // stale, so there's nothing else useful to show; start a fresh one.
+  if (!collapsed && state.channel && state.channel.readyState === 'open') {
+    startHost();
+  }
+});
+
 const initialParams = new URLSearchParams(location.search);
 const initialCode = initialParams.get('code');
-if (initialCode && CODE_RE.test(initialCode)) {
-  joinWithCode(initialCode, initialParams.get('offer'), {
-    wifi: initialParams.get('wifi') === '1',
-    hidden: initialParams.get('hidden') === '1',
-  });
+const initialJoin = initialCode && CODE_RE.test(initialCode)
+  ? {
+      code: initialCode,
+      offer: initialParams.get('offer'),
+      wifi: initialParams.get('wifi') === '1',
+      hidden: initialParams.get('hidden') === '1',
+    }
+  : null;
+
+// A join link is one-time — the code and embedded offer are only valid for
+// a single handshake. Strip them immediately so reloading this tab (after
+// pairing, or after a failed attempt) can't retry a dead connection; it
+// just starts fresh, same as opening the page any other time.
+if (location.search) history.replaceState(null, '', location.pathname);
+
+if (initialJoin) {
+  joinWithCode(initialJoin.code, initialJoin.offer, { wifi: initialJoin.wifi, hidden: initialJoin.hidden });
 } else {
   startHost();
 }
