@@ -93,12 +93,14 @@ app.innerHTML = `
     </div>
 
     <label class="row-wifi checkbox">
-      <input type="checkbox" id="sameWifi" />
-      Same Wi-Fi (no STUN)
+      <input type="checkbox" id="sameWifi" checked />
+      Same Wi-Fi (no STUN/TURN)
       <span class="tooltip" id="wifiTooltip" tabindex="0">?
-        <span class="bubble">When unchecked, a public STUN server (Google's) helps the two devices
-          find each other across different networks. It only ever sees connection
-          metadata — never your shared text.</span>
+        <span class="bubble">Checked connects the two devices directly over the local network only —
+          the quickest, most anonymous option, with no external server involved at all. Uncheck it
+          if the devices aren't on the same network: a public STUN server (Google's) and TURN relay
+          (Cloudflare's) then help them find each other. They only ever see connection metadata —
+          never your shared text.</span>
       </span>
     </label>
   </div>
@@ -320,6 +322,11 @@ function wirePeerConnectionLifecycle(pc) {
       setStatus('Connecting…', 'connecting');
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       setStatus('Connection failed', 'failed');
+      if (sameWifiCheckbox.checked) {
+        connectError.textContent =
+          "Couldn't connect directly — if the devices aren't on the same network, uncheck \"Same Wi-Fi\" and try again.";
+        connectError.classList.remove('hidden');
+      }
     } else if (pc.connectionState === 'closed') {
       setStatus('Disconnected', '');
     }

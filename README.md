@@ -23,6 +23,13 @@ moments where email, chat, or reading it aloud all feel wrong.
 3. That's it — the connection opens automatically and the shared text
    area syncs both ways.
 
+**Same Wi-Fi (no STUN/TURN)** is checked by default — the quickest and
+most anonymous option, connecting the two devices directly over the
+local network with no external server involved. Uncheck it if the
+devices aren't on the same network, so a public STUN server and TURN
+relay can help them find each other (still peer-to-peer for the actual
+shared text).
+
 Reloading always gives you a fresh code. Scanning the QR with your
 phone's normal camera app works too: it opens a link that auto-connects
 on load, no extra tap needed.
