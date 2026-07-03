@@ -401,10 +401,6 @@ label.row-wifi.checkbox {
   resize: vertical;
 }
 
-#sharedText:disabled {
-  opacity: 0.5;
-}
-
 #sharedText.masked {
   -webkit-text-security: disc;
 }
@@ -423,6 +419,12 @@ label.row-wifi.checkbox {
   color: var(--text-dim);
   font-size: 0.85rem;
   cursor: pointer;
+}
+
+.file-status {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
 }
 
 .btn-small {

@@ -3,6 +3,7 @@ import { renderQr, createScanner } from './qr.js';
 import { createPeerConnection, waitForIceGatheringComplete } from './webrtc.js';
 import { compressSdp, decompressSdp } from './sdp.js';
 import { createSession, fetchSession, submitAnswer, fetchTurnServers } from './signal.js';
+import { sendFile, triggerDownload, MAX_FILE_SIZE } from './filetransfer.js';
 
 const app = document.querySelector('#app');
 
@@ -106,12 +107,18 @@ app.innerHTML = `
   </div>
 
   <div class="panel text-panel">
-    <textarea id="sharedText" placeholder="Connect to start typing..." disabled></textarea>
+    <textarea id="sharedText" placeholder="Type here — it'll sync as soon as you're connected..."></textarea>
     <div class="text-controls">
       <label class="checkbox">
         <input type="checkbox" id="hiddenToggle" />
         Hidden
       </label>
+      <input type="file" id="fileInput" hidden />
+      <button id="fileBtn" class="icon-btn" type="button" title="Send a file" aria-label="Send a file">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <button id="copyBtn" class="icon-btn" type="button" title="Copy to clipboard" aria-label="Copy to clipboard">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="8" y="8" width="12" height="12" rx="2"/>
@@ -119,6 +126,7 @@ app.innerHTML = `
         </svg>
       </button>
     </div>
+    <div class="file-status hidden" id="fileStatus"></div>
   </div>
 
   <footer class="site-footer">
@@ -156,6 +164,9 @@ const wifiTooltip = el('wifiTooltip');
 const sharedText = el('sharedText');
 const hiddenToggle = el('hiddenToggle');
 const copyBtn = el('copyBtn');
+const fileBtn = el('fileBtn');
+const fileInput = el('fileInput');
+const fileStatus = el('fileStatus');
 
 const COPY_ICON = copyBtn.innerHTML;
 const CHECK_ICON =
@@ -173,6 +184,9 @@ const state = {
   pollTimer: null,
   scanner: null,
   hostCode: null,
+  pendingFile: null, // picked before a channel was open; sent as soon as one opens
+  sendingFile: false,
+  incomingFile: null, // { name, size, mime, chunks, received } while a receive is in progress
 };
 
 let debounceTimer = null;
@@ -233,28 +247,37 @@ function teardown() {
     state.pc = null;
   }
   state.hostCode = null;
-  sharedText.disabled = true;
+  state.sendingFile = false;
+  if (state.incomingFile) {
+    state.incomingFile = null;
+    fileStatus.classList.add('hidden');
+  }
 }
 
 function setupDataChannel(channel) {
+  channel.binaryType = 'arraybuffer';
   state.channel = channel;
   channel.onopen = () => {
     setStatus('Connected', 'connected');
-    sharedText.disabled = false;
     stopPolling();
     stopScanner();
     connectPanel.classList.add('hidden');
     if (hiddenToggle.checked) sendHiddenState();
+    if (sharedText.value) channel.send(JSON.stringify({ type: 'text', value: sharedText.value }));
+    if (state.pendingFile) beginFileSend(state.pendingFile);
   };
   channel.onclose = () => {
     setStatus('Disconnected', '');
-    sharedText.disabled = true;
     connectPanel.classList.remove('hidden');
   };
   channel.onerror = () => {
     setStatus('Connection failed', 'failed');
   };
   channel.onmessage = (event) => {
+    if (typeof event.data !== 'string') {
+      receiveFileChunk(event.data);
+      return;
+    }
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === 'text') {
@@ -264,11 +287,54 @@ function setupDataChannel(channel) {
         flashReveal();
       } else if (msg.type === 'hidden') {
         applyHiddenState(msg.value);
+      } else if (msg.type === 'file-start') {
+        state.incomingFile = { name: msg.name, size: msg.size, mime: msg.mime, chunks: [], received: 0 };
+        fileStatus.classList.remove('hidden');
+        fileStatus.textContent = `Receiving "${msg.name}"… 0%`;
+      } else if (msg.type === 'file-end') {
+        finishFileReceive();
       }
     } catch {
       // ignore malformed messages
     }
   };
+}
+
+function receiveFileChunk(data) {
+  const incoming = state.incomingFile;
+  if (!incoming) return;
+  incoming.chunks.push(data);
+  incoming.received += data.byteLength;
+  fileStatus.textContent = `Receiving "${incoming.name}"… ${Math.round((incoming.received / incoming.size) * 100)}%`;
+}
+
+function finishFileReceive() {
+  const incoming = state.incomingFile;
+  if (!incoming) return;
+  const blob = new Blob(incoming.chunks, { type: incoming.mime });
+  triggerDownload(blob, incoming.name);
+  fileStatus.textContent = `Received "${incoming.name}".`;
+  setTimeout(() => fileStatus.classList.add('hidden'), 3000);
+  state.incomingFile = null;
+}
+
+async function beginFileSend(file) {
+  if (state.sendingFile || !state.channel || state.channel.readyState !== 'open') return;
+  state.sendingFile = true;
+  fileStatus.classList.remove('hidden');
+  fileStatus.textContent = `Sending "${file.name}"… 0%`;
+  try {
+    await sendFile(state.channel, file, (sent, total) => {
+      fileStatus.textContent = `Sending "${file.name}"… ${Math.round((sent / total) * 100)}%`;
+    });
+    fileStatus.textContent = `Sent "${file.name}".`;
+    setTimeout(() => fileStatus.classList.add('hidden'), 3000);
+  } catch {
+    fileStatus.textContent = `Failed to send "${file.name}".`;
+  } finally {
+    state.sendingFile = false;
+    state.pendingFile = null;
+  }
 }
 
 function applyHiddenState(value) {
@@ -312,6 +378,28 @@ copyBtn.addEventListener('click', async () => {
     }, 1200);
   } catch {
     // clipboard API unavailable or denied — nothing more we can do
+  }
+});
+
+fileBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (!file) return;
+
+  if (file.size > MAX_FILE_SIZE) {
+    connectError.textContent = `That file is too big — max ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB.`;
+    connectError.classList.remove('hidden');
+    return;
+  }
+
+  if (state.channel && state.channel.readyState === 'open') {
+    beginFileSend(file);
+  } else {
+    state.pendingFile = file;
+    fileStatus.classList.remove('hidden');
+    fileStatus.textContent = `"${file.name}" will send as soon as you're connected…`;
   }
 });
 
