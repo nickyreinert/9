@@ -28,81 +28,94 @@ app.innerHTML = `
     </div>
   </header>
 
-  <div class="panel row-status">
-    <div class="status-dot" id="statusDot"></div>
-    <div class="status-text" id="statusText">Starting…</div>
-    <button id="cameraToggleBtn" class="icon-btn" title="Scan a QR code with your camera" aria-label="Scan QR code">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 1-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2" stroke-linecap="round"/>
-        <rect x="9" y="9" width="6" height="6" rx="1"/>
-      </svg>
-    </button>
-  </div>
+  <div class="panel connect-panel" id="connectPanel">
+    <div class="row-status">
+      <div class="status-dot" id="statusDot"></div>
+      <div class="status-text" id="statusText">Starting…</div>
+      <button id="cameraToggleBtn" class="icon-btn" title="Scan a QR code with your camera" aria-label="Scan QR code">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 1-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2" stroke-linecap="round"/>
+          <rect x="9" y="9" width="6" height="6" rx="1"/>
+        </svg>
+      </button>
+    </div>
 
-  <div class="error-msg hidden" id="connectError"></div>
+    <div class="error-msg hidden" id="connectError"></div>
 
-  <div class="panel row-qr" id="qrPanel">
-    <div class="qr-hover" tabindex="0">
-      <canvas id="hostCanvas"></canvas>
-      <div class="bubble qr-bubble">
-        <strong>Your code</strong> — scan to connect. Encodes:
-        <div class="bubble-url" id="qrTooltipUrl"></div>
+    <div class="row-qr" id="qrPanel">
+      <div class="qr-hover" tabindex="0">
+        <canvas id="hostCanvas"></canvas>
+        <div class="bubble qr-bubble">
+          <strong>Your code</strong> — scan to connect. Encodes:
+          <div class="bubble-url" id="qrTooltipUrl"></div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="panel row-qr hidden" id="numpadPanel">
-    <div class="numpad">
-      <button type="button" class="numpad-key" data-digit="1">1</button>
-      <button type="button" class="numpad-key" data-digit="2">2</button>
-      <button type="button" class="numpad-key" data-digit="3">3</button>
-      <button type="button" class="numpad-key" data-digit="4">4</button>
-      <button type="button" class="numpad-key" data-digit="5">5</button>
-      <button type="button" class="numpad-key" data-digit="6">6</button>
-      <button type="button" class="numpad-key" data-digit="7">7</button>
-      <button type="button" class="numpad-key" data-digit="8">8</button>
-      <button type="button" class="numpad-key" data-digit="9">9</button>
-      <button type="button" class="numpad-key numpad-clear" id="numpadClear">⌫</button>
-      <button type="button" class="numpad-key" data-digit="0">0</button>
-      <div></div>
+    <div class="row-qr hidden" id="numpadPanel">
+      <div class="numpad">
+        <button type="button" class="numpad-key" data-digit="1">1</button>
+        <button type="button" class="numpad-key" data-digit="2">2</button>
+        <button type="button" class="numpad-key" data-digit="3">3</button>
+        <button type="button" class="numpad-key" data-digit="4">4</button>
+        <button type="button" class="numpad-key" data-digit="5">5</button>
+        <button type="button" class="numpad-key" data-digit="6">6</button>
+        <button type="button" class="numpad-key" data-digit="7">7</button>
+        <button type="button" class="numpad-key" data-digit="8">8</button>
+        <button type="button" class="numpad-key" data-digit="9">9</button>
+        <button type="button" class="numpad-key numpad-clear" id="numpadClear">⌫</button>
+        <button type="button" class="numpad-key" data-digit="0">0</button>
+        <div></div>
+      </div>
     </div>
+
+    <div class="row-qr hidden" id="cameraPanel">
+      <video id="scanVideo" muted playsinline></video>
+    </div>
+
+    <div class="big-code" id="hostCodeText">------</div>
+
+    <div class="row-join">
+      <button id="numpadToggleBtn" class="icon-btn" title="Enter code with an on-screen keypad" aria-label="Toggle on-screen keypad">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="4" y="4" width="16" height="16" rx="2"/>
+          <path d="M8 9h.01M12 9h.01M16 9h.01M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
+      <button id="joinCodeBtn">Connect</button>
+      <span class="tooltip" id="codeTooltip" tabindex="0">?
+        <span class="bubble">However you enter it — QR scan, keypad, or typing — connecting
+          always briefly relays a one-time handshake through a small Cloudflare
+          service so the two devices can find each other. Your shared text itself
+          never passes through it and stays directly peer-to-peer.</span>
+      </span>
+    </div>
+
+    <label class="row-wifi checkbox">
+      <input type="checkbox" id="sameWifi" />
+      Same Wi-Fi (no STUN)
+      <span class="tooltip" id="wifiTooltip" tabindex="0">?
+        <span class="bubble">When unchecked, a public STUN server (Google's) helps the two devices
+          find each other across different networks. It only ever sees connection
+          metadata — never your shared text.</span>
+      </span>
+    </label>
   </div>
 
-  <div class="panel row-qr hidden" id="cameraPanel">
-    <video id="scanVideo" muted playsinline></video>
-  </div>
-
-  <div class="big-code" id="hostCodeText">------</div>
-
-  <div class="panel row-join">
-    <button id="numpadToggleBtn" class="icon-btn" title="Enter code with an on-screen keypad" aria-label="Toggle on-screen keypad">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="4" y="4" width="16" height="16" rx="2"/>
-        <path d="M8 9h.01M12 9h.01M16 9h.01M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01" stroke-linecap="round"/>
-      </svg>
-    </button>
-    <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
-    <button id="joinCodeBtn">Connect</button>
-  </div>
-
-  <label class="panel row-wifi checkbox">
-    <input type="checkbox" id="sameWifi" />
-    Same Wi-Fi (no STUN)
-    <span class="tooltip" tabindex="0">?
-      <span class="bubble">When unchecked, a public STUN server (Google's) helps the two devices
-        find each other across different networks. It only ever sees connection
-        metadata — never your shared text.</span>
-    </span>
-  </label>
-
-  <div class="panel">
+  <div class="panel text-panel">
     <textarea id="sharedText" placeholder="Connect to start typing..." disabled></textarea>
     <div class="text-controls">
       <label class="checkbox">
         <input type="checkbox" id="hiddenToggle" />
         Hidden
       </label>
-      <button id="copyBtn" class="secondary btn-small" type="button">Copy</button>
+      <button id="copyBtn" class="icon-btn" type="button" title="Copy to clipboard" aria-label="Copy to clipboard">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="8" y="8" width="12" height="12" rx="2"/>
+          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
   </div>
 
@@ -135,10 +148,18 @@ const qrPanel = el('qrPanel');
 const numpadPanel = el('numpadPanel');
 const cameraPanel = el('cameraPanel');
 const numpadToggleBtn = el('numpadToggleBtn');
+const connectPanel = el('connectPanel');
+const wifiTooltip = el('wifiTooltip');
 
 const sharedText = el('sharedText');
 const hiddenToggle = el('hiddenToggle');
 const copyBtn = el('copyBtn');
+
+const COPY_ICON = copyBtn.innerHTML;
+const CHECK_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+wifiTooltip.addEventListener('click', (e) => e.preventDefault());
 
 const CODE_RE = /^\d{6}$/;
 
@@ -192,6 +213,7 @@ function teardown() {
   stopPolling();
   stopScanner();
   showSlot('qr');
+  connectPanel.classList.remove('hidden');
   if (state.channel) {
     state.channel.close();
     state.channel = null;
@@ -211,10 +233,12 @@ function setupDataChannel(channel) {
     sharedText.disabled = false;
     stopPolling();
     stopScanner();
+    connectPanel.classList.add('hidden');
   };
   channel.onclose = () => {
     setStatus('Disconnected', '');
     sharedText.disabled = true;
+    connectPanel.classList.remove('hidden');
   };
   channel.onerror = () => {
     setStatus('Connection failed', 'failed');
@@ -253,10 +277,9 @@ hiddenToggle.addEventListener('change', () => {
 copyBtn.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(sharedText.value);
-    const original = copyBtn.textContent;
-    copyBtn.textContent = 'Copied!';
+    copyBtn.innerHTML = CHECK_ICON;
     setTimeout(() => {
-      copyBtn.textContent = original;
+      copyBtn.innerHTML = COPY_ICON;
     }, 1200);
   } catch {
     // clipboard API unavailable or denied — nothing more we can do
@@ -276,8 +299,11 @@ function wirePeerConnectionLifecycle(pc) {
   };
 }
 
-function codeUrl(code) {
-  return `${location.origin}${location.pathname}?code=${code}`;
+function codeUrl(code, compressedOffer) {
+  const url = new URL(location.pathname, location.origin);
+  url.searchParams.set('code', code);
+  url.searchParams.set('offer', compressedOffer);
+  return url.toString();
 }
 
 async function startHost() {
@@ -296,9 +322,11 @@ async function startHost() {
   await pc.setLocalDescription(offer);
   await waitForIceGatheringComplete(pc);
 
+  const compressedOffer = compressSdp(pc.localDescription.sdp);
+
   let code;
   try {
-    ({ code } = await createSession(compressSdp(pc.localDescription.sdp)));
+    ({ code } = await createSession(compressedOffer));
   } catch (err) {
     setStatus('Signaling server unavailable', 'failed');
     return;
@@ -307,7 +335,7 @@ async function startHost() {
 
   state.hostCode = code;
   hostCodeText.textContent = code;
-  const url = codeUrl(code);
+  const url = codeUrl(code, compressedOffer);
   qrTooltipUrl.textContent = url;
   await renderQr(hostCanvas, url);
 
@@ -333,7 +361,7 @@ function pollForAnswer(pc, code) {
   }, 1500);
 }
 
-async function joinWithCode(code) {
+async function joinWithCode(code, embeddedOffer) {
   await stopScanner();
   connectError.classList.add('hidden');
 
@@ -348,19 +376,28 @@ async function joinWithCode(code) {
   setStatus('Connecting…', 'connecting');
 
   try {
-    const session = await fetchSession(code);
-    if (!session) throw new Error('Code not found or expired');
+    let offerSdp;
+    if (embeddedOffer) {
+      // Offer came straight from the QR — no Cloudflare fetch needed for it.
+      offerSdp = decompressSdp(embeddedOffer);
+    } else {
+      const session = await fetchSession(code);
+      if (!session) throw new Error('Code not found or expired');
+      offerSdp = decompressSdp(session.offer);
+    }
 
     const pc = createPeerConnection(sameWifiCheckbox.checked);
     state.pc = pc;
     wirePeerConnectionLifecycle(pc);
     pc.ondatachannel = (event) => setupDataChannel(event.channel);
 
-    await pc.setRemoteDescription({ type: 'offer', sdp: decompressSdp(session.offer) });
+    await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitForIceGatheringComplete(pc);
 
+    // The answer still relays back through Cloudflare either way — it's a
+    // small, one-time blob and the host is already polling for it there.
     await submitAnswer(code, compressSdp(pc.localDescription.sdp));
   } catch (err) {
     connectError.textContent = err.message;
@@ -369,13 +406,14 @@ async function joinWithCode(code) {
   }
 }
 
-function extractCode(raw) {
+function parseScannedPayload(raw) {
   const trimmed = raw.trim();
-  if (CODE_RE.test(trimmed)) return trimmed;
+  if (CODE_RE.test(trimmed)) return { code: trimmed, offer: null };
   try {
     const u = new URL(trimmed);
-    const c = u.searchParams.get('code');
-    if (c && CODE_RE.test(c)) return c;
+    const code = u.searchParams.get('code');
+    const offer = u.searchParams.get('offer');
+    if (code && CODE_RE.test(code)) return { code, offer: offer || null };
   } catch {
     // not a URL
   }
@@ -389,8 +427,8 @@ cameraToggleBtn.addEventListener('click', async () => {
     showSlot('camera');
     try {
       const scanner = createScanner(scanVideo, (data) => {
-        const code = extractCode(data);
-        if (code) joinWithCode(code);
+        const parsed = parseScannedPayload(data);
+        if (parsed) joinWithCode(parsed.code, parsed.offer);
       });
       state.scanner = scanner;
       await scanner.start();
@@ -439,9 +477,10 @@ sameWifiCheckbox.addEventListener('change', () => {
   }
 });
 
-const initialCode = new URLSearchParams(location.search).get('code');
+const initialParams = new URLSearchParams(location.search);
+const initialCode = initialParams.get('code');
 if (initialCode && CODE_RE.test(initialCode)) {
-  joinWithCode(initialCode);
+  joinWithCode(initialCode, initialParams.get('offer'));
 } else {
   startHost();
 }
