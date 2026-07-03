@@ -1,4 +1,4 @@
-# QR P2P Text Share
+# 9 - Share text. Quickly. Secure. Anonymous.
 
 Text sync between two devices over a direct WebRTC DataChannel. The
 shared text itself is always fully peer-to-peer and DTLS-encrypted — no
