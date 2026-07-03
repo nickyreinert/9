@@ -23,6 +23,13 @@ moments where email, chat, or reading it aloud all feel wrong.
 3. That's it — the connection opens automatically and the shared text
    area syncs both ways.
 
+**Same Wi-Fi (no STUN/TURN)** is checked by default — the quickest and
+most anonymous option, connecting the two devices directly over the
+local network with no external server involved. Uncheck it if the
+devices aren't on the same network, so a public STUN server and TURN
+relay can help them find each other (still peer-to-peer for the actual
+shared text).
+
 Reloading always gives you a fresh code. Scanning the QR with your
 phone's normal camera app works too: it opens a link that auto-connects
 on load, no extra tap needed.
@@ -37,9 +44,10 @@ on load, no extra tap needed.
 - **Dual signaling mode:** scanning the QR embeds the connection offer
   directly, so it never touches Cloudflare; typing or tapping in the code
   fetches it through a tiny Cloudflare relay instead.
-- **Same Wi-Fi (no STUN)** toggle for direct LAN connections vs. Google
-  STUN for cross-network NAT traversal — with tooltips explaining both
-  that and the Cloudflare relay.
+- **Same Wi-Fi (no STUN/TURN)** toggle, checked by default for the
+  quickest and most anonymous LAN-only connection; uncheck it for
+  cross-network NAT traversal via Google STUN and a Cloudflare TURN
+  relay — with tooltips explaining both that and the Cloudflare relay.
 - The Connect card auto-collapses once paired, giving the text area the
   full space.
 
@@ -143,6 +151,30 @@ via GitHub Actions on every push to `main`. One-time setup:
    `VITE_SIGNAL_URL`.
 5. Re-run the deploy workflow (or push again) so the site picks it up.
 
+### TURN server (for NAT traversal across networks)
+
+STUN alone can't connect two peers when one is behind a strict/symmetric
+NAT — carrier mobile hotspots (CGNAT) are the common case — and ICE will
+fail with an error like "ICE failed, add a TURN server". The worker can
+mint short-lived credentials for [Cloudflare's Realtime TURN
+service](https://developers.cloudflare.com/realtime/turn/) so the app has
+a relay fallback:
+
+1. In the Cloudflare dashboard, go to **Realtime → TURN** and create a
+   TURN key. Note its **Turn Token ID** and generate an **API Token**.
+2. Set both as worker secrets:
+   ```bash
+   cd worker
+   npx wrangler secret put TURN_KEY_ID
+   npx wrangler secret put TURN_KEY_API_TOKEN
+   ```
+3. Re-deploy the worker: `npx wrangler deploy`.
+
+No client-side config needed — the app fetches `GET /turn` from the
+signaling worker and merges the returned ICE servers in automatically.
+If the secrets aren't set, `/turn` returns an empty list and the app
+falls back to STUN-only, same as before.
+
 ## Release notes
 
 **Latest**
@@ -150,6 +182,8 @@ via GitHub Actions on every push to `main`. One-time setup:
 - Peer-to-peer text sync over a direct, DTLS-encrypted WebRTC DataChannel
 - Auto-generated QR + 6-digit code, with QR-scan or numpad/manual entry
 - Dual signaling: QR embeds the offer (no relay); codes use the Cloudflare relay
-- Same-Wi-Fi (LAN) vs. STUN toggle for cross-network connections
-- Hidden mode with per-edit reveal, plus one-click copy
+- Same-Wi-Fi (LAN-only, default) vs. STUN+TURN toggle for cross-network connections
+- Hidden mode with per-edit reveal, synced live to the peer, plus one-click copy
+- Scanning the QR preselects the Same-Wi-Fi and Hidden settings on the joining device
+- TURN relay fallback (Cloudflare) for peers behind strict/symmetric NAT
 - Static Vite build on GitHub Pages, ephemeral Cloudflare Worker + KV relay (10-min TTL)

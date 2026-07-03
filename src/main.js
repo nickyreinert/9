@@ -2,7 +2,7 @@ import './style.css';
 import { renderQr, createScanner } from './qr.js';
 import { createPeerConnection, waitForIceGatheringComplete } from './webrtc.js';
 import { compressSdp, decompressSdp } from './sdp.js';
-import { createSession, fetchSession, submitAnswer } from './signal.js';
+import { createSession, fetchSession, submitAnswer, fetchTurnServers } from './signal.js';
 
 const app = document.querySelector('#app');
 
@@ -93,12 +93,14 @@ app.innerHTML = `
     </div>
 
     <label class="row-wifi checkbox">
-      <input type="checkbox" id="sameWifi" />
-      Same Wi-Fi (no STUN)
+      <input type="checkbox" id="sameWifi" checked />
+      Same Wi-Fi (no STUN/TURN)
       <span class="tooltip" id="wifiTooltip" tabindex="0">?
-        <span class="bubble">When unchecked, a public STUN server (Google's) helps the two devices
-          find each other across different networks. It only ever sees connection
-          metadata — never your shared text.</span>
+        <span class="bubble">Checked connects the two devices directly over the local network only —
+          the quickest, most anonymous option, with no external server involved at all. Uncheck it
+          if the devices aren't on the same network: a public STUN server (Google's) and TURN relay
+          (Cloudflare's) then help them find each other. They only ever see connection metadata —
+          never your shared text.</span>
       </span>
     </label>
   </div>
@@ -176,6 +178,14 @@ const state = {
 let debounceTimer = null;
 let revealTimer = null;
 
+// Fetched once per page load and reused for every connection attempt — the
+// TURN service issues credentials valid for a day, far longer than a session.
+let turnServersPromise = null;
+function getTurnServers() {
+  if (!turnServersPromise) turnServersPromise = fetchTurnServers();
+  return turnServersPromise;
+}
+
 function flashReveal() {
   if (!hiddenToggle.checked) return;
   sharedText.classList.remove('masked');
@@ -234,6 +244,7 @@ function setupDataChannel(channel) {
     stopPolling();
     stopScanner();
     connectPanel.classList.add('hidden');
+    if (hiddenToggle.checked) sendHiddenState();
   };
   channel.onclose = () => {
     setStatus('Disconnected', '');
@@ -251,11 +262,25 @@ function setupDataChannel(channel) {
         sharedText.value = msg.value;
         state.isRemoteUpdate = false;
         flashReveal();
+      } else if (msg.type === 'hidden') {
+        applyHiddenState(msg.value);
       }
     } catch {
       // ignore malformed messages
     }
   };
+}
+
+function applyHiddenState(value) {
+  hiddenToggle.checked = value;
+  clearTimeout(revealTimer);
+  sharedText.classList.toggle('masked', value);
+}
+
+function sendHiddenState() {
+  if (state.channel && state.channel.readyState === 'open') {
+    state.channel.send(JSON.stringify({ type: 'hidden', value: hiddenToggle.checked }));
+  }
 }
 
 sharedText.addEventListener('input', () => {
@@ -272,6 +297,10 @@ sharedText.addEventListener('input', () => {
 hiddenToggle.addEventListener('change', () => {
   clearTimeout(revealTimer);
   sharedText.classList.toggle('masked', hiddenToggle.checked);
+  sendHiddenState();
+  if (state.mode === 'host' && !(state.channel && state.channel.readyState === 'open')) {
+    startHost();
+  }
 });
 
 copyBtn.addEventListener('click', async () => {
@@ -293,6 +322,11 @@ function wirePeerConnectionLifecycle(pc) {
       setStatus('Connecting…', 'connecting');
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       setStatus('Connection failed', 'failed');
+      if (sameWifiCheckbox.checked) {
+        connectError.textContent =
+          "Couldn't connect directly — if the devices aren't on the same network, uncheck \"Same Wi-Fi\" and try again.";
+        connectError.classList.remove('hidden');
+      }
     } else if (pc.connectionState === 'closed') {
       setStatus('Disconnected', '');
     }
@@ -303,6 +337,8 @@ function codeUrl(code, compressedOffer) {
   const url = new URL(location.pathname, location.origin);
   url.searchParams.set('code', code);
   url.searchParams.set('offer', compressedOffer);
+  if (sameWifiCheckbox.checked) url.searchParams.set('wifi', '1');
+  if (hiddenToggle.checked) url.searchParams.set('hidden', '1');
   return url.toString();
 }
 
@@ -313,7 +349,10 @@ async function startHost() {
   qrTooltipUrl.textContent = '';
   setStatus('Waiting for a peer…', 'connecting');
 
-  const pc = createPeerConnection(sameWifiCheckbox.checked);
+  const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+  if (state.mode !== 'host') return; // superseded while fetching TURN credentials
+
+  const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
   state.pc = pc;
   wirePeerConnectionLifecycle(pc);
   setupDataChannel(pc.createDataChannel('text'));
@@ -361,7 +400,7 @@ function pollForAnswer(pc, code) {
   }, 1500);
 }
 
-async function joinWithCode(code, embeddedOffer) {
+async function joinWithCode(code, embeddedOffer, presetOpts) {
   await stopScanner();
   connectError.classList.add('hidden');
 
@@ -369,6 +408,11 @@ async function joinWithCode(code, embeddedOffer) {
     connectError.textContent = 'That code looks invalid — it should be 6 digits.';
     connectError.classList.remove('hidden');
     return;
+  }
+
+  if (presetOpts) {
+    sameWifiCheckbox.checked = !!presetOpts.wifi;
+    applyHiddenState(!!presetOpts.hidden);
   }
 
   teardown();
@@ -386,7 +430,8 @@ async function joinWithCode(code, embeddedOffer) {
       offerSdp = decompressSdp(session.offer);
     }
 
-    const pc = createPeerConnection(sameWifiCheckbox.checked);
+    const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+    const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
     state.pc = pc;
     wirePeerConnectionLifecycle(pc);
     pc.ondatachannel = (event) => setupDataChannel(event.channel);
@@ -413,7 +458,14 @@ function parseScannedPayload(raw) {
     const u = new URL(trimmed);
     const code = u.searchParams.get('code');
     const offer = u.searchParams.get('offer');
-    if (code && CODE_RE.test(code)) return { code, offer: offer || null };
+    if (code && CODE_RE.test(code)) {
+      return {
+        code,
+        offer: offer || null,
+        wifi: u.searchParams.get('wifi') === '1',
+        hidden: u.searchParams.get('hidden') === '1',
+      };
+    }
   } catch {
     // not a URL
   }
@@ -426,9 +478,9 @@ cameraToggleBtn.addEventListener('click', async () => {
   if (opening) {
     showSlot('camera');
     try {
-      const scanner = createScanner(scanVideo, (data) => {
+      const scanner = await createScanner(scanVideo, (data) => {
         const parsed = parseScannedPayload(data);
-        if (parsed) joinWithCode(parsed.code, parsed.offer);
+        if (parsed) joinWithCode(parsed.code, parsed.offer, { wifi: parsed.wifi, hidden: parsed.hidden });
       });
       state.scanner = scanner;
       await scanner.start();
@@ -480,7 +532,10 @@ sameWifiCheckbox.addEventListener('change', () => {
 const initialParams = new URLSearchParams(location.search);
 const initialCode = initialParams.get('code');
 if (initialCode && CODE_RE.test(initialCode)) {
-  joinWithCode(initialCode, initialParams.get('offer'));
+  joinWithCode(initialCode, initialParams.get('offer'), {
+    wifi: initialParams.get('wifi') === '1',
+    hidden: initialParams.get('hidden') === '1',
+  });
 } else {
   startHost();
 }

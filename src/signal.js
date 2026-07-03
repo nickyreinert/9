@@ -25,3 +25,14 @@ export async function submitAnswer(code, answer) {
   if (!res.ok) throw new Error('Could not submit the answer (code expired?)');
   return res.json();
 }
+
+export async function fetchTurnServers() {
+  try {
+    const res = await fetch(`${SIGNAL_URL}/turn`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.iceServers) ? data.iceServers : [];
+  } catch {
+    return [];
+  }
+}
