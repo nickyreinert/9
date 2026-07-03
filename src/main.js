@@ -12,42 +12,50 @@ app.innerHTML = `
     <p>Open on two devices. One shows a code, the other clicks Connect — no server sees your text.</p>
   </header>
 
-  <div class="panel">
+  <div class="panel connect-panel">
     <div class="status-row">
       <div class="status-dot" id="statusDot"></div>
       <div class="status-text" id="statusText">Starting…</div>
     </div>
-    <div class="controls-row">
-      <label class="checkbox">
-        <input type="checkbox" id="sameWifi" />
-        Same Wi-Fi (no STUN)
-      </label>
-    </div>
-  </div>
 
-  <div class="panel" id="hostPanel">
-    <h2>Your code</h2>
-    <p class="hint">Have the other device scan this or enter the code below.</p>
-    <div class="qr-wrap">
-      <canvas id="hostCanvas"></canvas>
-      <div class="big-code" id="hostCodeText">------</div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <button id="connectBtn">Connect</button>
-    <div class="hidden" id="connectPanel">
-      <div class="qr-wrap"><video id="scanVideo" muted playsinline></video></div>
-      <div class="code-row">
-        <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
-        <button id="codeGoBtn" class="secondary">Join</button>
+    <div class="connect-row">
+      <div class="qr-hover" tabindex="0">
+        <canvas id="hostCanvas"></canvas>
+        <div class="bubble qr-bubble">
+          <strong>Your code</strong> — scan to connect. Encodes:
+          <div class="bubble-url" id="qrTooltipUrl"></div>
+        </div>
       </div>
-      <div class="error-msg hidden" id="connectError"></div>
+
+      <div class="big-code" id="hostCodeText">------</div>
+
+      <div class="join-controls">
+        <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
+        <button id="joinCodeBtn">Connect</button>
+        <button id="cameraToggleBtn" class="icon-btn" title="Scan a QR code with your camera" aria-label="Scan QR code">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 8V6a2 2 0 0 1 2-2h2M20 8V6a2 2 0 0 1-2-2h-2M4 16v2a2 2 0 0 0 2 2h2M20 16v2a2 2 0 0 1-2 2h-2" stroke-linecap="round"/>
+            <rect x="9" y="9" width="6" height="6" rx="1"/>
+          </svg>
+        </button>
+      </div>
     </div>
+
+    <video id="scanVideo" class="hidden" muted playsinline></video>
+    <div class="error-msg hidden" id="connectError"></div>
+
+    <label class="checkbox">
+      <input type="checkbox" id="sameWifi" />
+      Same Wi-Fi (no STUN)
+      <span class="tooltip" tabindex="0">?
+        <span class="bubble">When unchecked, a public STUN server (Google's) helps the two devices
+          find each other across different networks. It only ever sees connection
+          metadata — never your shared text.</span>
+      </span>
+    </label>
   </div>
 
   <div class="panel">
-    <h2>Shared text</h2>
     <textarea id="sharedText" placeholder="Connect to start typing..." disabled></textarea>
   </div>
 `;
@@ -58,15 +66,14 @@ const statusDot = el('statusDot');
 const statusText = el('statusText');
 const sameWifiCheckbox = el('sameWifi');
 
-const hostPanel = el('hostPanel');
 const hostCanvas = el('hostCanvas');
 const hostCodeText = el('hostCodeText');
+const qrTooltipUrl = el('qrTooltipUrl');
 
-const connectBtn = el('connectBtn');
-const connectPanel = el('connectPanel');
-const scanVideo = el('scanVideo');
 const codeInput = el('codeInput');
-const codeGoBtn = el('codeGoBtn');
+const joinCodeBtn = el('joinCodeBtn');
+const cameraToggleBtn = el('cameraToggleBtn');
+const scanVideo = el('scanVideo');
 const connectError = el('connectError');
 
 const sharedText = el('sharedText');
@@ -90,16 +97,13 @@ function setStatus(text, cls) {
   statusDot.className = 'status-dot' + (cls ? ' ' + cls : '');
 }
 
-function showPanel(elm, show) {
-  elm.classList.toggle('hidden', !show);
-}
-
 function stopPolling() {
   clearInterval(state.pollTimer);
   state.pollTimer = null;
 }
 
 async function stopScanner() {
+  scanVideo.classList.add('hidden');
   if (state.scanner) {
     state.scanner.stop();
     state.scanner.destroy();
@@ -119,7 +123,6 @@ function teardown() {
     state.pc = null;
   }
   state.hostCode = null;
-  sharedText.value = '';
   sharedText.disabled = true;
 }
 
@@ -130,9 +133,6 @@ function setupDataChannel(channel) {
     sharedText.disabled = false;
     stopPolling();
     stopScanner();
-    showPanel(hostPanel, false);
-    showPanel(connectPanel, false);
-    connectBtn.classList.add('hidden');
   };
   channel.onclose = () => {
     setStatus('Disconnected', '');
@@ -185,10 +185,8 @@ function codeUrl(code) {
 async function startHost() {
   teardown();
   state.mode = 'host';
-  connectBtn.classList.remove('hidden');
-  showPanel(hostPanel, true);
-  showPanel(connectPanel, false);
   hostCodeText.textContent = '------';
+  qrTooltipUrl.textContent = '';
   setStatus('Waiting for a peer…', 'connecting');
 
   const pc = createPeerConnection(sameWifiCheckbox.checked);
@@ -211,7 +209,9 @@ async function startHost() {
 
   state.hostCode = code;
   hostCodeText.textContent = code;
-  await renderQr(hostCanvas, codeUrl(code));
+  const url = codeUrl(code);
+  qrTooltipUrl.textContent = url;
+  await renderQr(hostCanvas, url);
 
   pollForAnswer(pc, code);
 }
@@ -247,8 +247,6 @@ async function joinWithCode(code) {
 
   teardown();
   state.mode = 'joiner';
-  showPanel(hostPanel, false);
-  showPanel(connectPanel, false);
   setStatus('Connecting…', 'connecting');
 
   try {
@@ -286,11 +284,11 @@ function extractCode(raw) {
   return null;
 }
 
-connectBtn.addEventListener('click', async () => {
-  const opening = connectPanel.classList.contains('hidden');
-  showPanel(connectPanel, opening);
+cameraToggleBtn.addEventListener('click', async () => {
+  const opening = scanVideo.classList.contains('hidden');
   connectError.classList.add('hidden');
   if (opening) {
+    scanVideo.classList.remove('hidden');
     try {
       const scanner = createScanner(scanVideo, (data) => {
         const code = extractCode(data);
@@ -299,14 +297,16 @@ connectBtn.addEventListener('click', async () => {
       state.scanner = scanner;
       await scanner.start();
     } catch {
-      // camera unavailable — manual code entry below still works
+      scanVideo.classList.add('hidden');
+      connectError.textContent = 'Camera unavailable — enter the code instead.';
+      connectError.classList.remove('hidden');
     }
   } else {
     await stopScanner();
   }
 });
 
-codeGoBtn.addEventListener('click', () => joinWithCode(codeInput.value.trim()));
+joinCodeBtn.addEventListener('click', () => joinWithCode(codeInput.value.trim()));
 codeInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') joinWithCode(codeInput.value.trim());
 });
