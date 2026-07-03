@@ -14,7 +14,14 @@ app.innerHTML = `
         <span></span><span></span><span></span>
         <span></span><span></span><span></span>
       </div>
-      <h1>9</h1>
+      <h1 class="digit-nine" role="img" aria-label="9">
+        <span class="seg seg-a"></span>
+        <span class="seg seg-b"></span>
+        <span class="seg seg-c"></span>
+        <span class="seg seg-d"></span>
+        <span class="seg seg-f"></span>
+        <span class="seg seg-g"></span>
+      </h1>
     </div>
     <div class="hero-right">
       <p>Share text. Quickly. Secure. Anonymous</p>
@@ -32,10 +39,9 @@ app.innerHTML = `
     </button>
   </div>
 
-  <video id="scanVideo" class="hidden" muted playsinline></video>
   <div class="error-msg hidden" id="connectError"></div>
 
-  <div class="panel row-qr">
+  <div class="panel row-qr" id="qrPanel">
     <div class="qr-hover" tabindex="0">
       <canvas id="hostCanvas"></canvas>
       <div class="bubble qr-bubble">
@@ -45,9 +51,36 @@ app.innerHTML = `
     </div>
   </div>
 
+  <div class="panel row-qr hidden" id="numpadPanel">
+    <div class="numpad">
+      <button type="button" class="numpad-key" data-digit="1">1</button>
+      <button type="button" class="numpad-key" data-digit="2">2</button>
+      <button type="button" class="numpad-key" data-digit="3">3</button>
+      <button type="button" class="numpad-key" data-digit="4">4</button>
+      <button type="button" class="numpad-key" data-digit="5">5</button>
+      <button type="button" class="numpad-key" data-digit="6">6</button>
+      <button type="button" class="numpad-key" data-digit="7">7</button>
+      <button type="button" class="numpad-key" data-digit="8">8</button>
+      <button type="button" class="numpad-key" data-digit="9">9</button>
+      <button type="button" class="numpad-key numpad-clear" id="numpadClear">⌫</button>
+      <button type="button" class="numpad-key" data-digit="0">0</button>
+      <div></div>
+    </div>
+  </div>
+
+  <div class="panel row-qr hidden" id="cameraPanel">
+    <video id="scanVideo" muted playsinline></video>
+  </div>
+
   <div class="big-code" id="hostCodeText">------</div>
 
   <div class="panel row-join">
+    <button id="numpadToggleBtn" class="icon-btn" title="Enter code with an on-screen keypad" aria-label="Toggle on-screen keypad">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="4" y="4" width="16" height="16" rx="2"/>
+        <path d="M8 9h.01M12 9h.01M16 9h.01M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01" stroke-linecap="round"/>
+      </svg>
+    </button>
     <input type="text" id="codeInput" placeholder="Enter code" maxlength="6" inputmode="numeric" autocomplete="off" />
     <button id="joinCodeBtn">Connect</button>
   </div>
@@ -64,12 +97,19 @@ app.innerHTML = `
 
   <div class="panel">
     <textarea id="sharedText" placeholder="Connect to start typing..." disabled></textarea>
+    <div class="text-controls">
+      <label class="checkbox">
+        <input type="checkbox" id="hiddenToggle" />
+        Hidden
+      </label>
+      <button id="copyBtn" class="secondary btn-small" type="button">Copy</button>
+    </div>
   </div>
 
   <footer class="site-footer">
     <span>Powered by <a href="https://institut-fdh.de" target="_blank" rel="noopener noreferrer">Institut für digitale Herausforderung</a></span>
     <span class="footer-sep">·</span>
-    <a href="buymeacoffee.com/nickyreinert" target="_blank" rel="noopener noreferrer">Buy me a coffee</a>
+    <a href="https://buymeacoffee.com/nickyreinert" target="_blank" rel="noopener noreferrer">Buy me a coffee</a>
     <span class="footer-sep">·</span>
     <a href="https://9000.1-1-1.de/" target="_blank" rel="noopener noreferrer">HTTP Mirror</a>
   </footer>
@@ -91,7 +131,14 @@ const cameraToggleBtn = el('cameraToggleBtn');
 const scanVideo = el('scanVideo');
 const connectError = el('connectError');
 
+const qrPanel = el('qrPanel');
+const numpadPanel = el('numpadPanel');
+const cameraPanel = el('cameraPanel');
+const numpadToggleBtn = el('numpadToggleBtn');
+
 const sharedText = el('sharedText');
+const hiddenToggle = el('hiddenToggle');
+const copyBtn = el('copyBtn');
 
 const CODE_RE = /^\d{6}$/;
 
@@ -106,6 +153,16 @@ const state = {
 };
 
 let debounceTimer = null;
+let revealTimer = null;
+
+function flashReveal() {
+  if (!hiddenToggle.checked) return;
+  sharedText.classList.remove('masked');
+  clearTimeout(revealTimer);
+  revealTimer = setTimeout(() => {
+    sharedText.classList.add('masked');
+  }, 900);
+}
 
 function setStatus(text, cls) {
   statusText.textContent = text;
@@ -118,7 +175,6 @@ function stopPolling() {
 }
 
 async function stopScanner() {
-  scanVideo.classList.add('hidden');
   if (state.scanner) {
     state.scanner.stop();
     state.scanner.destroy();
@@ -126,9 +182,16 @@ async function stopScanner() {
   }
 }
 
+function showSlot(which) {
+  qrPanel.classList.toggle('hidden', which !== 'qr');
+  numpadPanel.classList.toggle('hidden', which !== 'numpad');
+  cameraPanel.classList.toggle('hidden', which !== 'camera');
+}
+
 function teardown() {
   stopPolling();
   stopScanner();
+  showSlot('qr');
   if (state.channel) {
     state.channel.close();
     state.channel = null;
@@ -163,6 +226,7 @@ function setupDataChannel(channel) {
         state.isRemoteUpdate = true;
         sharedText.value = msg.value;
         state.isRemoteUpdate = false;
+        flashReveal();
       }
     } catch {
       // ignore malformed messages
@@ -172,12 +236,31 @@ function setupDataChannel(channel) {
 
 sharedText.addEventListener('input', () => {
   if (state.isRemoteUpdate) return;
+  flashReveal();
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     if (state.channel && state.channel.readyState === 'open') {
       state.channel.send(JSON.stringify({ type: 'text', value: sharedText.value }));
     }
   }, 75);
+});
+
+hiddenToggle.addEventListener('change', () => {
+  clearTimeout(revealTimer);
+  sharedText.classList.toggle('masked', hiddenToggle.checked);
+});
+
+copyBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(sharedText.value);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => {
+      copyBtn.textContent = original;
+    }, 1200);
+  } catch {
+    // clipboard API unavailable or denied — nothing more we can do
+  }
 });
 
 function wirePeerConnectionLifecycle(pc) {
@@ -300,10 +383,10 @@ function extractCode(raw) {
 }
 
 cameraToggleBtn.addEventListener('click', async () => {
-  const opening = scanVideo.classList.contains('hidden');
+  const opening = cameraPanel.classList.contains('hidden');
   connectError.classList.add('hidden');
   if (opening) {
-    scanVideo.classList.remove('hidden');
+    showSlot('camera');
     try {
       const scanner = createScanner(scanVideo, (data) => {
         const code = extractCode(data);
@@ -312,12 +395,36 @@ cameraToggleBtn.addEventListener('click', async () => {
       state.scanner = scanner;
       await scanner.start();
     } catch {
-      scanVideo.classList.add('hidden');
+      showSlot('qr');
       connectError.textContent = 'Camera unavailable — enter the code instead.';
       connectError.classList.remove('hidden');
     }
   } else {
     await stopScanner();
+    showSlot('qr');
+  }
+});
+
+numpadToggleBtn.addEventListener('click', async () => {
+  const opening = numpadPanel.classList.contains('hidden');
+  if (opening) {
+    await stopScanner();
+    showSlot('numpad');
+  } else {
+    showSlot('qr');
+  }
+});
+
+numpadPanel.addEventListener('click', (e) => {
+  const digitBtn = e.target.closest('.numpad-key[data-digit]');
+  if (digitBtn) {
+    if (codeInput.value.length < 6) codeInput.value += digitBtn.dataset.digit;
+    codeInput.focus();
+    return;
+  }
+  if (e.target.closest('#numpadClear')) {
+    codeInput.value = codeInput.value.slice(0, -1);
+    codeInput.focus();
   }
 });
 

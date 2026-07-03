@@ -68,13 +68,59 @@ body {
   background: var(--accent);
 }
 
-.hero-left h1 {
-  font-family: var(--technical);
-  font-size: var(--hero-size);
-  font-weight: 700;
-  line-height: 1;
+.digit-nine {
+  position: relative;
+  width: calc(var(--hero-size) * 0.62);
+  height: var(--hero-size);
   margin: 0;
-  letter-spacing: -0.02em;
+  flex-shrink: 0;
+}
+
+.digit-nine .seg {
+  position: absolute;
+  background: var(--text);
+}
+
+.digit-nine .seg-a,
+.digit-nine .seg-g,
+.digit-nine .seg-d {
+  left: 10%;
+  right: 10%;
+  height: 13%;
+}
+
+.digit-nine .seg-a {
+  top: 0;
+}
+
+.digit-nine .seg-g {
+  top: 43.5%;
+}
+
+.digit-nine .seg-d {
+  bottom: 0;
+}
+
+.digit-nine .seg-f,
+.digit-nine .seg-b,
+.digit-nine .seg-c {
+  width: 16%;
+  height: 38%;
+}
+
+.digit-nine .seg-f {
+  top: 10%;
+  left: 0;
+}
+
+.digit-nine .seg-b {
+  top: 10%;
+  right: 0;
+}
+
+.digit-nine .seg-c {
+  bottom: 10%;
+  right: 0;
 }
 
 .hero-right {
@@ -220,12 +266,39 @@ button:hover:not(:disabled) {
 }
 
 video {
-  width: 100%;
-  max-width: 280px;
+  width: 220px;
+  height: 220px;
   border-radius: 8px;
   background: #000;
-  margin: 0 auto 16px;
+  object-fit: cover;
   display: block;
+}
+
+.numpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  width: 220px;
+}
+
+.numpad-key {
+  background: #0b0d12;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 14px 0;
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.numpad-key:hover {
+  filter: none;
+  border-color: var(--text-dim);
+}
+
+.numpad-clear {
+  color: var(--text-dim);
 }
 
 label.row-wifi.checkbox {
@@ -313,6 +386,37 @@ label.row-wifi.checkbox {
 
 #sharedText:disabled {
   opacity: 0.5;
+}
+
+#sharedText.masked {
+  -webkit-text-security: disc;
+}
+
+.text-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.text-controls .checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
 }
 
 .error-msg {
