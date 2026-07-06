@@ -16,19 +16,21 @@ const app = document.querySelector('#app');
 app.innerHTML = `
   <header class="hero">
     <div class="hero-left">
-      <div class="dots" aria-hidden="true">
-        <span></span><span></span><span></span>
-        <span></span><span></span><span></span>
-        <span></span><span></span><span></span>
+      <div class="logo">
+        <div class="dots" aria-hidden="true">
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+        </div>
+        <h1 class="digit-nine" role="img" aria-label="9">
+          <span class="seg seg-a"></span>
+          <span class="seg seg-b"></span>
+          <span class="seg seg-c"></span>
+          <span class="seg seg-d"></span>
+          <span class="seg seg-f"></span>
+          <span class="seg seg-g"></span>
+        </h1>
       </div>
-      <h1 class="digit-nine" role="img" aria-label="9">
-        <span class="seg seg-a"></span>
-        <span class="seg seg-b"></span>
-        <span class="seg seg-c"></span>
-        <span class="seg seg-d"></span>
-        <span class="seg seg-f"></span>
-        <span class="seg seg-g"></span>
-      </h1>
     </div>
     <div class="hero-right">
       <p>Share text. Quickly. Secure. Anonymous.</p>

@@ -53,14 +53,20 @@ body {
   flex-shrink: 0;
 }
 
-.dots {
+.logo {
+  position: relative;
   width: var(--hero-size);
   height: var(--hero-size);
+  flex-shrink: 0;
+}
+
+.dots {
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: repeat(3, 1fr);
   gap: 12%;
-  flex-shrink: 0;
 }
 
 .dots span {
@@ -68,59 +74,63 @@ body {
   background: var(--accent);
 }
 
+/* The "9" is laid exactly over the dots so its segments connect them.
+   Dot centres in the 3x3 grid sit at 12.667% / 50% / 87.333%. */
 .digit-nine {
-  position: relative;
-  width: calc(var(--hero-size) * 0.62);
-  height: var(--hero-size);
+  position: absolute;
+  inset: 0;
   margin: 0;
-  flex-shrink: 0;
+  --t: 10%;
 }
 
 .digit-nine .seg {
   position: absolute;
-  background: var(--text);
+  background: #4f7fe6;
+  border-radius: 999px;
 }
 
+/* horizontal segments run between the left and right dot centres */
 .digit-nine .seg-a,
 .digit-nine .seg-g,
 .digit-nine .seg-d {
-  left: 10%;
-  right: 10%;
-  height: 13%;
+  left: 12.667%;
+  right: 12.667%;
+  height: var(--t);
 }
 
 .digit-nine .seg-a {
-  top: 0;
+  top: calc(12.667% - var(--t) / 2);
 }
 
 .digit-nine .seg-g {
-  top: 43.5%;
+  top: calc(50% - var(--t) / 2);
 }
 
 .digit-nine .seg-d {
-  bottom: 0;
+  top: calc(87.333% - var(--t) / 2);
 }
 
+/* vertical segments run between vertically adjacent dot centres */
 .digit-nine .seg-f,
 .digit-nine .seg-b,
 .digit-nine .seg-c {
-  width: 16%;
-  height: 38%;
+  width: var(--t);
+  height: 37.333%;
 }
 
 .digit-nine .seg-f {
-  top: 10%;
-  left: 0;
+  top: 12.667%;
+  left: calc(12.667% - var(--t) / 2);
 }
 
 .digit-nine .seg-b {
-  top: 10%;
-  right: 0;
+  top: 12.667%;
+  left: calc(87.333% - var(--t) / 2);
 }
 
 .digit-nine .seg-c {
-  bottom: 10%;
-  right: 0;
+  top: 50%;
+  left: calc(87.333% - var(--t) / 2);
 }
 
 .hero-right {
