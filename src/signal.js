@@ -33,13 +33,24 @@ export function deleteSession(code) {
   return fetch(`${SIGNAL_URL}/session/${code}`, { method: 'DELETE' }).catch(() => {});
 }
 
+// Bounded, because this blocks the whole connection setup: on a captive or
+// half-broken network (train Wi-Fi mid-handover) the request can hang for
+// far longer than the browser's default, leaving the app stuck on
+// "Preparing…" with nothing on screen to explain it. Better to give up and
+// connect STUN-only than to stall indefinitely.
+const TURN_FETCH_TIMEOUT_MS = 5000;
+
 export async function fetchTurnServers() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TURN_FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(`${SIGNAL_URL}/turn`);
+    const res = await fetch(`${SIGNAL_URL}/turn`, { signal: controller.signal });
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data.iceServers) ? data.iceServers : [];
   } catch {
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }

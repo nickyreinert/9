@@ -25,10 +25,13 @@ moments where email, chat, or reading it aloud all feel wrong.
 
 **Same Wi-Fi (no STUN/TURN)** is checked by default — the quickest and
 most anonymous option, connecting the two devices directly over the
-local network with no external server involved. Uncheck it if the
-devices aren't on the same network, so a public STUN server and TURN
-relay can help them find each other (still peer-to-peer for the actual
-shared text).
+local network with no external server involved. If the devices turn out
+to be on different networks, the device showing the code notices the
+failure, turns this off by itself and shows a new code to scan, so a
+public STUN server and TURN relay can help them find each other (still
+peer-to-peer for the actual shared text). You can also just uncheck it
+up front — but do that on the device showing the code, since that's the
+device whose connection offer has to be rebuilt.
 
 Reloading always gives you a fresh code. Scanning the QR with your
 phone's normal camera app works too: it opens a link that auto-connects
@@ -199,7 +202,14 @@ a relay fallback:
 No client-side config needed — the app fetches `GET /turn` from the
 signaling worker and merges the returned ICE servers in automatically.
 If the secrets aren't set, `/turn` returns an empty list and the app
-falls back to STUN-only, same as before.
+falls back to STUN-only, and says so in the status line rather than
+claiming a relay it doesn't have.
+
+**This is not optional if you expect cross-network use.** Two devices on
+different carrier-grade-NAT networks — a laptop on train or hotel Wi-Fi
+and a phone on mobile data is the everyday case — cannot reach each other
+with STUN alone. Without these secrets set, that pairing will fail no
+matter what the user does in the UI.
 
 ## Release notes
 
