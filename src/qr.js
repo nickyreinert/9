@@ -1,6 +1,9 @@
 import QRCode from 'qrcode';
 import QrScanner from 'qr-scanner';
 
+const HAVE_METADATA = 1; // HTMLMediaElement.HAVE_METADATA
+const rotationHandlers = new WeakMap();
+
 export async function renderQr(canvas, text) {
   await QRCode.toCanvas(canvas, text, {
     errorCorrectionLevel: 'L',
@@ -41,15 +44,27 @@ export async function createScanner(videoEl, onResult) {
   // leaving the preview sideways. Detect that mismatch and correct it.
   // Set directly (not via a CSS class) so it can't be clobbered by any
   // inline transform QrScanner itself might still set elsewhere.
-  videoEl.addEventListener(
-    'loadedmetadata',
-    () => {
-      const portraitViewport = window.innerHeight > window.innerWidth;
-      const landscapeStream = videoEl.videoWidth > videoEl.videoHeight;
-      videoEl.style.transform = portraitViewport && landscapeStream ? 'rotate(90deg)' : '';
-    },
-    { once: true }
-  );
+  const applyRotation = () => {
+    const portraitViewport = window.innerHeight > window.innerWidth;
+    const landscapeStream = videoEl.videoWidth > videoEl.videoHeight;
+    videoEl.style.transform = portraitViewport && landscapeStream ? 'rotate(90deg)' : '';
+  };
+
+  // Drop the previous open's handler first: `once` only removes it if the
+  // event actually fired, so a camera that was closed before metadata
+  // arrived would otherwise leave a dead listener behind on every open.
+  if (rotationHandlers.has(videoEl)) {
+    videoEl.removeEventListener('loadedmetadata', rotationHandlers.get(videoEl));
+  }
+  if (videoEl.readyState >= HAVE_METADATA) {
+    // Metadata was already available (a reused element on a fast reopen) —
+    // the event won't fire again, so apply it now.
+    rotationHandlers.delete(videoEl);
+    applyRotation();
+  } else {
+    rotationHandlers.set(videoEl, applyRotation);
+    videoEl.addEventListener('loadedmetadata', applyRotation, { once: true });
+  }
 
   return scanner;
 }

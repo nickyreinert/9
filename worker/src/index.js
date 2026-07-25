@@ -5,6 +5,7 @@ const CORS_HEADERS = {
 };
 
 const TTL_SECONDS = 600;
+const MIN_TTL_SECONDS = 60; // Cloudflare KV's floor for expirationTtl
 // Compressed SDP offers/answers are ~1-2KB; anything much larger is abuse.
 const MAX_PAYLOAD_LENGTH = 32 * 1024;
 const CODE_RE = /^\d{6}$/;
@@ -18,9 +19,35 @@ function json(data, status = 200) {
 
 function randomCode() {
   // crypto-random so active codes can't be predicted from previous ones.
+  // Rejection sampling rather than a plain modulo: 2^32 isn't a multiple of
+  // 900000, so `% 900000` would make the low codes measurably likelier.
+  const limit = Math.floor(0x100000000 / 900000) * 900000;
   const buf = new Uint32Array(1);
-  crypto.getRandomValues(buf);
-  return String(100000 + (buf[0] % 900000));
+  let value;
+  do {
+    crypto.getRandomValues(buf);
+    value = buf[0];
+  } while (value >= limit);
+  return String(100000 + (value % 900000));
+}
+
+// KV holds whatever we last wrote, but a truncated or hand-edited value
+// shouldn't turn into a 500 — treat anything unparseable as a missing session.
+function parseSession(raw) {
+  try {
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+// Cloudflare KV requires expirationTtl >= 60s, so clamp rather than letting
+// an almost-expired session be rejected outright on write.
+function remainingTtl(createdAt) {
+  if (!Number.isFinite(createdAt)) return TTL_SECONDS;
+  const elapsed = Math.floor((Date.now() - createdAt) / 1000);
+  return Math.max(MIN_TTL_SECONDS, Math.min(TTL_SECONDS, TTL_SECONDS - elapsed));
 }
 
 async function allocateCode(sessions) {
@@ -93,9 +120,11 @@ export default {
       const code = await allocateCode(env.SESSIONS);
       if (!code) return json({ error: 'could not allocate code' }, 500);
 
-      await env.SESSIONS.put(code, JSON.stringify({ offer: body.offer, answer: null }), {
-        expirationTtl: TTL_SECONDS,
-      });
+      await env.SESSIONS.put(
+        code,
+        JSON.stringify({ offer: body.offer, answer: null, createdAt: Date.now() }),
+        { expirationTtl: TTL_SECONDS }
+      );
       return json({ code });
     }
 
@@ -109,7 +138,9 @@ export default {
     if (request.method === 'GET' && parts.length === 2) {
       const raw = await env.SESSIONS.get(code);
       if (!raw) return json({ error: 'not found' }, 404);
-      return json(JSON.parse(raw));
+      const data = parseSession(raw);
+      if (!data) return json({ error: 'not found' }, 404);
+      return json({ offer: data.offer, answer: data.answer });
     }
 
     // DELETE /session/:code — the host calls this once it has consumed the
@@ -134,9 +165,15 @@ export default {
       const raw = await env.SESSIONS.get(code);
       if (!raw) return json({ error: 'not found' }, 404);
 
-      const data = JSON.parse(raw);
+      const data = parseSession(raw);
+      if (!data) return json({ error: 'not found' }, 404);
       data.answer = body.answer;
-      await env.SESSIONS.put(code, JSON.stringify(data), { expirationTtl: TTL_SECONDS });
+      // Keep the session's original expiry instead of granting it a fresh
+      // full TTL — otherwise answering resets the 10-minute window the
+      // client (and the README) count on.
+      await env.SESSIONS.put(code, JSON.stringify(data), {
+        expirationTtl: remainingTtl(data.createdAt),
+      });
       return json({ ok: true });
     }
 
