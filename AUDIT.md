@@ -77,6 +77,28 @@ the pre-fix build and re-verified afterwards.
 
 ---
 
+## Third pass — NAT traversal across different networks
+
+Prompted by a real failure: a laptop on Deutsche Bahn ICE Wi-Fi and a phone
+on LTE could not pair. Both networks are carrier-grade NAT, so a relay is
+the only thing that can bridge them — and three separate things conspired
+to prevent one from being used.
+
+| # | Area | Severity | Issue | Fix |
+|---|---|---|---|---|
+| 26 | Same-Wi-Fi mode across networks | **Correctness** | "Same Wi-Fi" is checked by default and configures `iceServers: []` — host candidates only, so two devices on different networks have no candidate pair that can *ever* succeed. The join link encodes `wifi=1`, so a phone scanning the host's QR had the setting forced back on even if its user had just turned it off. The failure advice — "uncheck Same Wi-Fi and try again" — then pointed at the wrong device: ICE here is non-trickle, so the offer has to be rebuilt on whichever device is *showing* the code, and unchecking on the scanning device does nothing at all. | The host now detects the failure and retries once by itself: it turns Same Wi-Fi off, regenerates the offer with STUN/TURN, and shows a new code (whose link no longer forces `wifi=1` on the scanner). The joiner is told to scan the new code. The retry runs at most once per attempt, and is re-armed whenever the user changes the setting themselves. |
+| 27 | ICE gathering budget | **Correctness** | `waitForIceGatheringComplete` capped gathering at a flat 6s. Because ICE is non-trickle, whatever has been gathered when that fires is all the peer will ever see — there is no second chance to send a late candidate. A TURN allocation over a slow, lossy link (train Wi-Fi, tethered mobile data) routinely takes longer than 6s, so the offer shipped **without the relay candidate** — precisely the one needed — and did so silently, exactly under the conditions where a relay is mandatory. | The short budget still applies to the common case, but when a relay is expected and hasn't arrived, the wait extends to a 20s hard deadline and ends the moment the relay candidate appears. The UI says what it's waiting for instead of looking stuck. |
+| 28 | Silent STUN-only fallback | **Correctness (UX)** | If the worker has no TURN credentials configured it returns an empty list and the client silently continues STUN-only — while the status line still read "Trying local network, Google STUN, Cloudflare TURN". STUN alone cannot connect two CGNAT'd networks, so this reported a relay that was never in play and sent people looking for the wrong problem. | The status line reports what is actually configured, and a failure with no relay available says so explicitly instead of offering generic advice. |
+| 29 | Unbounded `/turn` fetch | **Reliability** | `fetchTurnServers` had no timeout and blocks the whole of connection setup. On a captive or half-broken network — a train mid-handover is the obvious case — the request can hang far past the browser default, leaving the app on "Preparing…" indefinitely with nothing on screen to explain it. Confirmed: with `/turn` hanging, setup never completed. | Aborted after 5s, falling back to STUN-only rather than stalling. |
+
+Note that #26 fixes the recovery, not the underlying trade-off: Same Wi-Fi
+stays checked by default, because it remains the quickest and most private
+option and is right for the common case of two devices in one room. What
+changed is that being wrong about it now costs one automatic retry instead
+of a dead end.
+
+---
+
 ## Deliberately out of scope / accepted risk
 
 Being direct about what this audit does *not* close off:
@@ -106,3 +128,10 @@ unmodified build and then re-verified fixed:
 - A 4MB zlib bomb packed into a 5.4KB `?offer=` param: rejected before inflating.
 - Worker: TTL preservation across an answer, the 60s clamp, unparseable-record handling, and 3,000 generated codes checked for range and spread.
 - File transfer in isolation: clean send, closed channel, mid-transfer close, a peer that stops responding entirely, and a file that becomes unreadable — each rejects promptly instead of hanging.
+
+Third pass:
+
+- ICE gathering in isolation: completes early, ends on the end-of-candidates signal, honours the short budget when no relay is expected, waits past it (and resolves the instant the relay lands) when one is, detects a relay from the candidate line when `RTCIceCandidate.type` is absent, doesn't mistake a host candidate for a relay, and is still bounded by the hard deadline when no relay ever arrives.
+- The full Same-Wi-Fi failure path driven in a real browser: the connection is put into `failed`, and the app is checked for unchecking the box itself, minting a new code, dropping `wifi=1` from the new join link, actually configuring ICE servers on the retry, not retrying a second time, and naming the missing relay as the blocker.
+- A hanging `/turn`: **pre-fix** setup never completed → **post-fix** falls back and mints a code in ~11s.
+- Status-detail strings recorded across a full host cycle to confirm the UI no longer claims a TURN relay it doesn't have.

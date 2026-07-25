@@ -219,6 +219,15 @@ const state = {
   pendingFile: null, // picked before a channel was open; sent as soon as one opens
   sendingFile: false,
   incomingFile: null, // { name, size, mime, chunks, received } while a receive is in progress
+  // Whether the current attempt actually has a TURN relay available. The
+  // relay is optional infrastructure (the worker returns an empty list if
+  // its credentials aren't configured), and the difference matters enough
+  // to the user that the UI shouldn't claim one either way.
+  usingTurn: false,
+  // Same-Wi-Fi mode can't reach a device on another network at all, so a
+  // failure there is retried once with a relay rather than asked of the
+  // user. Not reset by teardown — that would let the retry retry itself.
+  relayFallbackTried: false,
   // Bumped by every teardown. Setting up a connection is a long chain of
   // awaits (TURN fetch, ICE gathering, signaling round-trips); each step
   // re-checks this so a superseded attempt — a second QR scan, a toggled
@@ -574,20 +583,47 @@ fileInput.addEventListener('change', () => {
   }
 });
 
+// What this attempt is actually trying, rather than what it would like to
+// be trying — claiming "Cloudflare TURN" when the relay came back empty
+// sends people looking for the wrong problem when it fails.
+function transportDetail() {
+  if (sameWifiCheckbox.checked) return 'Trying local network only';
+  return state.usingTurn
+    ? 'Trying local network, Google STUN, Cloudflare TURN'
+    : 'Trying local network and Google STUN — no TURN relay available';
+}
+
+// With "Same Wi-Fi" checked the peer connection gathers no STUN/TURN
+// candidates at all, so two devices on different networks (a laptop on
+// train or café Wi-Fi, a phone on mobile data) have no candidate pair that
+// could ever succeed. The old advice — "uncheck Same Wi-Fi and try again" —
+// also pointed at the wrong device: ICE here is non-trickle, so the offer
+// has to be rebuilt on whichever device is *showing* the code, and
+// unchecking on the scanning device does nothing. Do it for them instead.
+function attemptRelayFallback() {
+  if (state.relayFallbackTried || !sameWifiCheckbox.checked) return false;
+  state.relayFallbackTried = true;
+  sameWifiCheckbox.checked = false;
+  connectError.textContent =
+    state.mode === 'host'
+      ? "Those devices aren't on the same network — retrying with a relay. Scan the new code."
+      : "Those devices aren't on the same network. The other device is making a new code — scan that one.";
+  connectError.classList.remove('hidden');
+  // Only the host can act on this: it owns the offer, so it regenerates one
+  // that includes relay candidates. The joiner's code is already spent.
+  if (state.mode === 'host') startHost();
+  return true;
+}
+
 function wirePeerConnectionLifecycle(pc) {
   let everConnected = false;
   pc.onconnectionstatechange = () => {
     if (!state.pc || pc !== state.pc) return;
     if (pc.connectionState === 'connecting') {
-      setStatus(
-        'Connecting…',
-        'connecting',
-        sameWifiCheckbox.checked
-          ? 'Trying local network only'
-          : 'Trying local network, Google STUN, Cloudflare TURN'
-      );
+      setStatus('Connecting…', 'connecting', transportDetail());
     } else if (pc.connectionState === 'connected') {
       everConnected = true;
+      state.relayFallbackTried = false;
     } else if (pc.connectionState === 'disconnected') {
       // Not terminal: ICE recovers from this on its own after a brief
       // network blip, so don't declare failure — that's what 'failed' is
@@ -598,13 +634,15 @@ function wirePeerConnectionLifecycle(pc) {
       }
     } else if (pc.connectionState === 'failed') {
       setStatus('Connection failed', 'failed');
-      // Only sound advice for a link that never came up. After a working
-      // connection drops, "uncheck Same Wi-Fi" is simply wrong.
-      if (sameWifiCheckbox.checked && !everConnected) {
-        connectError.textContent =
-          "Couldn't connect directly — if the devices aren't on the same network, uncheck \"Same Wi-Fi\" and try again.";
-        connectError.classList.remove('hidden');
-      }
+      // A link that came up and later died needs no advice about how to
+      // establish it — the network just dropped.
+      if (everConnected) return;
+      if (attemptRelayFallback()) return;
+      // The relay attempt has already been made and still failed.
+      connectError.textContent = state.usingTurn
+        ? "Couldn't connect, even through the relay. One of the networks may be blocking it — try a different network on either device."
+        : "Couldn't connect. These devices are on different networks and need a TURN relay to reach each other, but none is configured for this deployment.";
+      connectError.classList.remove('hidden');
     } else if (pc.connectionState === 'closed') {
       setStatus('Disconnected', '');
     }
@@ -633,6 +671,8 @@ async function startHost() {
   try {
     const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
     if (superseded()) return;
+    state.usingTurn = turnServers.length > 0;
+    setStatus('Preparing…', 'connecting', transportDetail());
 
     const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
     state.pc = pc;
@@ -642,7 +682,13 @@ async function startHost() {
     const offer = await pc.createOffer();
     if (superseded()) return;
     await pc.setLocalDescription(offer);
-    await waitForIceGatheringComplete(pc);
+    await waitForIceGatheringComplete(pc, {
+      needRelay: state.usingTurn,
+      onWaitingForRelay: () => {
+        if (superseded()) return;
+        setStatus('Preparing…', 'connecting', 'Waiting for a relay candidate — slow networks can take a moment');
+      },
+    });
     if (superseded()) return;
 
     setStatus('Registering…', 'connecting', 'Handshake via Cloudflare');
@@ -764,6 +810,7 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
 
     const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
     if (superseded()) return;
+    state.usingTurn = turnServers.length > 0;
 
     const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
     state.pc = pc;
@@ -774,7 +821,13 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
     if (superseded()) return;
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    await waitForIceGatheringComplete(pc);
+    await waitForIceGatheringComplete(pc, {
+      needRelay: state.usingTurn,
+      onWaitingForRelay: () => {
+        if (superseded()) return;
+        setStatus('Preparing…', 'connecting', 'Waiting for a relay candidate — slow networks can take a moment');
+      },
+    });
     if (superseded()) return;
 
     // The answer still relays back through Cloudflare either way — it's a
@@ -879,6 +932,10 @@ codeInput.addEventListener('keydown', (e) => {
 });
 
 sameWifiCheckbox.addEventListener('change', () => {
+  // A deliberate choice by the user, so the automatic relay retry is back
+  // on the table for whatever they're about to attempt.
+  state.relayFallbackTried = false;
+  connectError.classList.add('hidden');
   if (state.mode === 'host' && !(state.channel && state.channel.readyState === 'open')) {
     startHost();
   }
