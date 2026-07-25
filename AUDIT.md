@@ -54,6 +54,29 @@ holds the data.
 
 ---
 
+## Second pass — logic and correctness
+
+A follow-up review focused on control flow rather than trust boundaries:
+what happens when two things race, when a promise never settles, and when
+a peer stops halfway through. Each finding below was reproduced against
+the pre-fix build and re-verified afterwards.
+
+| # | Area | Severity | Issue | Fix |
+|---|---|---|---|---|
+| 15 | Superseded connection attempts | **Correctness** | Setting up a connection is a long chain of `await`s. The guards between them checked `state.mode`, which is still `'host'` for a *second* host attempt — so an attempt that had been torn down mid-flight (a re-scan, a toggled checkbox) resumed anyway, built its own `RTCPeerConnection`, overwrote `state.pc`, and registered a second relay session. Reproduced with a slow `/turn`: two live peer connections left open, only one of them reachable by the code on screen. | A `state.generation` counter, bumped by every `teardown()`. Both `startHost` and `joinWithCode` capture it and bail at each step if it moved, and the whole chain is wrapped so driving an already-closed connection can't escape as an unhandled rejection. Verified: one live peer connection after the same race. |
+| 16 | Truncated file transfers | **Correctness** | `file-end` triggered the download unconditionally. A transfer cut short mid-stream (peer sleeps, Wi-Fi drops) handed the user a silently truncated file reported as `Received "…"`. Reproduced by announcing 8KB and sending 1KB — the browser downloaded it and the UI called it a success. | The received byte count must equal the announced size, or nothing is saved and the receiver is told it arrived incomplete. |
+| 17 | Unbounded answer polling | **Reliability** | The host polled the relay every 1.5s forever. Past the 10-minute KV TTL the session is gone and the code on screen is dead, but a tab left open kept polling indefinitely. A malformed answer was equally unbounded — it was re-fetched and re-applied on every tick. | Polling stops at the session TTL and mints a fresh code instead of showing a QR that resolves to nothing. An answer is deleted from the relay before being applied, so a bad one is tried exactly once. |
+| 18 | Stalled file sends | **Reliability** | The `close`/`error` rejection added in #8 only helps when the channel *reports* the failure. A peer that vanishes without a clean close leaves `bufferedAmount` pinned and no event ever fires — `waitForDrain` hangs and `state.sendingFile` stays locked until reload, the same symptom #8 set out to fix. | A stall watchdog rejects when the outgoing buffer makes no progress at all for 30s; it re-arms while the buffer is still draining, so a genuinely slow link isn't cut off. |
+| 19 | Decompression bomb | Medium | #1 capped the *compressed* input at 16KB but not the inflated output — 16KB of deflate expands to hundreds of MB. Confirmed: a 5.4KB `?offer=` param inflated to 4MB unchecked. | Streaming inflate with a 128KB output cap, enforced chunk by chunk so an oversized payload is never fully materialised. |
+| 20 | `disconnected` treated as failure | **Correctness** | `disconnected` is a recoverable ICE state, not a terminal one, but it was handled identically to `failed` — a brief blip showed "Connection failed", and the "uncheck Same Wi-Fi" hint appeared even after a connection that had worked fine for minutes, where it is simply wrong advice. | `disconnected` now reports "Reconnecting…"; only `failed` is terminal, and the Same-Wi-Fi hint is limited to links that never came up. A stale error is also cleared when a connection succeeds. |
+| 21 | Service worker cached failures | **Reliability** | The `fetch` handler cached every response it saw, including 404s and 5xx. A miss or a bad deploy got written to the cache and served back happily on later loads; `cache.put` also throws outright on a 206. Confirmed: a 404 was written to the cache. | Only complete, successful, same-origin responses are stored, and the write is wrapped in `waitUntil` so it survives the worker being shut down. |
+| 22 | Camera stream leak on start failure | **Reliability** | #9 covered failures during acquisition, but not `scanner.start()` failing *after* the stream was acquired: the scanner was already in `state.scanner` and was never stopped, so the next camera open overwrote the handle and orphaned a live stream. | The failure path releases the scanner before giving up. |
+| 23 | Relay TTL reset on answer (worker) | Low | `POST /session/:code/answer` re-wrote the record with a full fresh `expirationTtl`, silently extending a session's life past the 10 minutes the client and README both count on. | The record carries its creation time and the remaining TTL is preserved (clamped to KV's 60s floor). |
+| 24 | Worker robustness | Low | A KV value that failed to parse threw out of the handler as a 500, and `GET /session/:code` echoed the whole stored record. `randomCode` used `% 900000` over a `Uint32`, which is not a multiple of 2³² and so biased the low codes. | Unparseable records 404 like a missing session, `GET` returns only `offer`/`answer`, and code generation uses rejection sampling. |
+| 25 | Silent rejections and raw errors | Low (UX) | Oversized or malformed `file-start` metadata was dropped with no feedback — the sender showed a progress bar climbing to 100% while the receiver showed nothing. Failed joins rendered `err.message` directly, surfacing raw `DOMException` text. | Rejected transfers say so; join errors are classified, and anything that isn't a deliberate user-facing message becomes a generic one. |
+
+---
+
 ## Deliberately out of scope / accepted risk
 
 Being direct about what this audit does *not* close off:
@@ -72,3 +95,14 @@ Being direct about what this audit does *not* close off:
 - A crafted malicious `?offer=` URL loaded in a real browser → clean error, graceful fallback to hosting, no exception leaking to the console.
 - Verified live that a relay session is actually gone (404) immediately after the handshake completes.
 - Full two-browser Playwright suites: text/hidden-mode sync, QR-encoded settings, file transfer (MD5-verified byte-for-byte), oversized-file rejection, camera scanner (stream acquisition, no mirror transform), connect-panel collapse behavior, and the reload-after-connect fix — all passing.
+
+For the second pass, every finding was first reproduced against the
+unmodified build and then re-verified fixed:
+
+- Two-browser pairing, bidirectional text sync, hidden-mode sync and a 300KB MD5-verified file transfer, re-run to confirm nothing regressed.
+- A truncated transfer (8KB announced, 1KB sent) — pre-fix the browser downloaded it and the UI reported success; post-fix nothing is saved and the receiver is told why.
+- The supersede race driven with a deliberately slow `/turn`: pre-fix two peer connections left open, post-fix exactly one.
+- A 404 requested through the service worker: pre-fix written to the cache, post-fix not — with the app shell still cached.
+- A 4MB zlib bomb packed into a 5.4KB `?offer=` param: rejected before inflating.
+- Worker: TTL preservation across an answer, the 60s clamp, unparseable-record handling, and 3,000 generated codes checked for range and spread.
+- File transfer in isolation: clean send, closed channel, mid-transfer close, a peer that stops responding entirely, and a file that becomes unreadable — each rejects promptly instead of hanging.

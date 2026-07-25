@@ -19,6 +19,20 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Only full, successful, same-origin responses belong in the cache. Without
+// this an offline blip or a 404/500 during a deploy gets stored and then
+// served back happily on every later load; `cache.put` also throws outright
+// on a 206 partial response.
+function isCacheable(response) {
+  return response && response.ok && response.status === 200 && response.type === 'basic';
+}
+
+function cachePut(request, response) {
+  if (!isCacheable(response)) return Promise.resolve();
+  const copy = response.clone();
+  return caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   // Only ever handle same-origin GETs. Everything else — the signaling
@@ -38,8 +52,9 @@ self.addEventListener('fetch', (event) => {
         (cached) =>
           cached ||
           fetch(request).then((response) => {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+            // waitUntil so the write survives the worker being shut down
+            // right after the response is handed back.
+            event.waitUntil(cachePut(request, response));
             return response;
           })
       )
@@ -50,8 +65,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        event.waitUntil(cachePut(request, response));
         return response;
       })
       .catch(() => caches.match(request).then((cached) => cached || caches.match('/')))

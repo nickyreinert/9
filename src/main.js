@@ -4,6 +4,7 @@ import { createPeerConnection, waitForIceGatheringComplete } from './webrtc.js';
 import { compressSdp, decompressSdp } from './sdp.js';
 import { createSession, fetchSession, submitAnswer, deleteSession, fetchTurnServers } from './signal.js';
 import { sendFile, triggerDownload, MAX_FILE_SIZE } from './filetransfer.js';
+import { UserError } from './errors.js';
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -203,6 +204,10 @@ const CODE_RE = /^\d{6}$/;
 // message limit (past which send() errors and can kill the channel).
 const MAX_TEXT_LENGTH = 50000;
 
+// The relay drops a handshake after 10 minutes (the worker's KV TTL), so a
+// code older than that can never be answered.
+const SESSION_TTL_MS = 10 * 60 * 1000;
+
 const state = {
   mode: null, // 'host' | 'joiner'
   pc: null,
@@ -214,6 +219,12 @@ const state = {
   pendingFile: null, // picked before a channel was open; sent as soon as one opens
   sendingFile: false,
   incomingFile: null, // { name, size, mime, chunks, received } while a receive is in progress
+  // Bumped by every teardown. Setting up a connection is a long chain of
+  // awaits (TURN fetch, ICE gathering, signaling round-trips); each step
+  // re-checks this so a superseded attempt — a second QR scan, a toggled
+  // checkbox — bails out instead of driving a peer connection that was
+  // already closed underneath it.
+  generation: 0,
 };
 
 let debounceTimer = null;
@@ -310,6 +321,7 @@ function showSlot(which) {
 }
 
 function teardown() {
+  state.generation++;
   stopPolling();
   stopScanner();
   showSlot('qr');
@@ -371,6 +383,9 @@ function setupDataChannel(channel) {
   channel.onopen = () => {
     if (state.channel !== channel) return;
     setStatus('Connected', 'connected');
+    // A hint from an earlier failed attempt ("uncheck Same Wi-Fi…") is not
+    // just stale now, it's wrong — clear it.
+    connectError.classList.add('hidden');
     stopPolling();
     stopScanner();
     connectPanel.classList.add('collapsed');
@@ -389,6 +404,12 @@ function setupDataChannel(channel) {
     if (state.channel !== channel) return;
     setStatus('Disconnected', '');
     connectPanel.classList.remove('collapsed');
+    // Drop a half-received file rather than leaving its chunks (up to the
+    // 25MB cap) pinned in memory waiting for a 'file-end' that can't come.
+    if (state.incomingFile) {
+      state.incomingFile = null;
+      setFileStatus('Incoming file cancelled — the connection closed.', 5000);
+    }
   };
   channel.onerror = () => {
     if (state.channel !== channel) return;
@@ -425,7 +446,13 @@ function startFileReceive(msg) {
   // a bogus size would defeat the receive cap, and the name becomes the
   // download filename.
   const size = Number(msg.size);
-  if (!Number.isFinite(size) || size <= 0 || size > MAX_FILE_SIZE) return;
+  if (!Number.isFinite(size) || size <= 0 || size > MAX_FILE_SIZE) {
+    // Silently ignoring this left the receiver staring at nothing while the
+    // sender showed a progress bar climbing to 100%.
+    state.incomingFile = null;
+    setFileStatus('Incoming file rejected — bad or oversized metadata.', 5000);
+    return;
+  }
   const name = String(msg.name || 'file').replace(/[/\\]/g, '_').slice(0, 200);
   const mime = typeof msg.mime === 'string' ? msg.mime : 'application/octet-stream';
   state.incomingFile = { name, size, mime, chunks: [], received: 0 };
@@ -451,10 +478,16 @@ function receiveFileChunk(data) {
 function finishFileReceive() {
   const incoming = state.incomingFile;
   if (!incoming) return;
+  state.incomingFile = null;
+  // Short of the announced size means chunks went missing — downloading it
+  // anyway would hand the user a silently truncated file that looks fine.
+  if (incoming.received !== incoming.size) {
+    setFileStatus(`"${incoming.name}" arrived incomplete — nothing was saved.`, 5000);
+    return;
+  }
   const blob = new Blob(incoming.chunks, { type: incoming.mime });
   triggerDownload(blob, incoming.name);
   setFileStatus(`Received "${incoming.name}".`, 3000);
-  state.incomingFile = null;
 }
 
 async function beginFileSend(file) {
@@ -542,6 +575,7 @@ fileInput.addEventListener('change', () => {
 });
 
 function wirePeerConnectionLifecycle(pc) {
+  let everConnected = false;
   pc.onconnectionstatechange = () => {
     if (!state.pc || pc !== state.pc) return;
     if (pc.connectionState === 'connecting') {
@@ -552,9 +586,21 @@ function wirePeerConnectionLifecycle(pc) {
           ? 'Trying local network only'
           : 'Trying local network, Google STUN, Cloudflare TURN'
       );
-    } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+    } else if (pc.connectionState === 'connected') {
+      everConnected = true;
+    } else if (pc.connectionState === 'disconnected') {
+      // Not terminal: ICE recovers from this on its own after a brief
+      // network blip, so don't declare failure — that's what 'failed' is
+      // for. If the channel is already gone the peer left deliberately and
+      // its 'Disconnected' status should stand.
+      if (state.channel && state.channel.readyState === 'open') {
+        setStatus('Reconnecting…', 'connecting', 'Connection interrupted');
+      }
+    } else if (pc.connectionState === 'failed') {
       setStatus('Connection failed', 'failed');
-      if (sameWifiCheckbox.checked) {
+      // Only sound advice for a link that never came up. After a working
+      // connection drops, "uncheck Same Wi-Fi" is simply wrong.
+      if (sameWifiCheckbox.checked && !everConnected) {
         connectError.textContent =
           "Couldn't connect directly — if the devices aren't on the same network, uncheck \"Same Wi-Fi\" and try again.";
         connectError.classList.remove('hidden');
@@ -576,71 +622,108 @@ function codeUrl(code, compressedOffer) {
 
 async function startHost() {
   teardown();
+  const gen = state.generation;
+  const superseded = () => gen !== state.generation;
+
   state.mode = 'host';
   hostCodeText.textContent = '------';
   qrTooltipUrl.textContent = '';
   setStatus('Preparing…', 'connecting', 'Gathering connection candidates');
 
-  const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
-  if (state.mode !== 'host') return; // superseded while fetching TURN credentials
-
-  const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
-  state.pc = pc;
-  wirePeerConnectionLifecycle(pc);
-  setupDataChannel(pc.createDataChannel('text'));
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await waitForIceGatheringComplete(pc);
-  if (state.mode !== 'host' || state.pc !== pc) return; // superseded
-
-  setStatus('Registering…', 'connecting', 'Handshake via Cloudflare');
-  const compressedOffer = compressSdp(pc.localDescription.sdp);
-
-  let code;
   try {
-    ({ code } = await createSession(compressedOffer));
-  } catch (err) {
-    setStatus('Signaling server unavailable', 'failed');
-    return;
-  }
-  if (state.mode !== 'host' || state.pc !== pc) return; // superseded
+    const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+    if (superseded()) return;
 
-  setStatus('Waiting for a peer…', 'connecting', 'Polling Cloudflare relay');
+    const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
+    state.pc = pc;
+    wirePeerConnectionLifecycle(pc);
+    setupDataChannel(pc.createDataChannel('text'));
 
-  state.hostCode = code;
-  hostCodeText.textContent = code;
-  const url = codeUrl(code, compressedOffer);
-  qrTooltipUrl.textContent = url;
-  try {
-    await renderQr(hostCanvas, url);
+    const offer = await pc.createOffer();
+    if (superseded()) return;
+    await pc.setLocalDescription(offer);
+    await waitForIceGatheringComplete(pc);
+    if (superseded()) return;
+
+    setStatus('Registering…', 'connecting', 'Handshake via Cloudflare');
+    const compressedOffer = compressSdp(pc.localDescription.sdp);
+
+    let code;
+    try {
+      ({ code } = await createSession(compressedOffer));
+    } catch {
+      if (superseded()) return;
+      setStatus('Signaling server unavailable', 'failed');
+      return;
+    }
+    if (superseded()) return;
+
+    setStatus('Waiting for a peer…', 'connecting', 'Polling Cloudflare relay');
+
+    state.hostCode = code;
+    hostCodeText.textContent = code;
+    const url = codeUrl(code, compressedOffer);
+    qrTooltipUrl.textContent = url;
+    try {
+      await renderQr(hostCanvas, url);
+    } catch {
+      // offer too dense for a QR (can happen with many ICE candidates) —
+      // the 6-digit code path still works, so don't fail the whole host setup
+    }
+    if (superseded()) return;
+
+    pollForAnswer(pc, code);
   } catch {
-    // offer too dense for a QR (can happen with many ICE candidates) —
-    // the 6-digit code path still works, so don't fail the whole host setup
+    // A superseded attempt drives an already-closed peer connection and
+    // throws — that's expected, and the newer attempt owns the UI now.
+    if (superseded()) return;
+    setStatus('Could not start a session', 'failed');
   }
-
-  pollForAnswer(pc, code);
 }
 
 function pollForAnswer(pc, code) {
   stopPolling();
+  // The relay forgets the handshake once its TTL lapses, so past this point
+  // the code on screen is dead and polling it is pure noise.
+  const deadline = Date.now() + SESSION_TTL_MS;
+  const stale = () => state.pc !== pc || state.hostCode !== code;
+
   // setTimeout chain rather than setInterval, so a slow fetch can't overlap
   // the next tick and double-apply the answer.
   const poll = async () => {
-    if (state.pc !== pc || state.hostCode !== code) return;
+    if (stale()) return;
+
+    let session = null;
     try {
-      const session = await fetchSession(code);
-      if (session && session.answer && state.pc === pc) {
-        await pc.setRemoteDescription({ type: 'answer', sdp: decompressSdp(session.answer) });
-        deleteSession(code); // handshake consumed — remove it from the relay right away
-        return;
-      }
+      session = await fetchSession(code);
     } catch {
-      // transient network error, keep polling
+      // transient network error — retry until the deadline
     }
-    if (state.pc === pc && state.hostCode === code) {
-      state.pollTimer = setTimeout(poll, 1500);
+    if (stale()) return;
+
+    if (session && session.answer) {
+      // The answer is single-use either way: consume it and drop it from
+      // the relay before applying it, so a malformed one can't be re-fetched
+      // and re-applied on every tick from here to the deadline.
+      stopPolling();
+      deleteSession(code);
+      try {
+        await pc.setRemoteDescription({ type: 'answer', sdp: decompressSdp(session.answer) });
+      } catch {
+        if (state.pc !== pc) return;
+        setStatus('Peer sent invalid connection data', 'failed');
+        startHost();
+      }
+      return;
     }
+
+    if (Date.now() >= deadline) {
+      // Replace the expired code with a fresh one instead of leaving a QR
+      // on screen that no longer resolves to anything.
+      startHost();
+      return;
+    }
+    state.pollTimer = setTimeout(poll, 1500);
   };
   state.pollTimer = setTimeout(poll, 1500);
 }
@@ -661,6 +744,8 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
   }
 
   teardown();
+  const gen = state.generation;
+  const superseded = () => gen !== state.generation;
   state.mode = 'joiner';
 
   try {
@@ -672,27 +757,37 @@ async function joinWithCode(code, embeddedOffer, presetOpts) {
     } else {
       setStatus('Preparing…', 'connecting', 'Fetching handshake via Cloudflare');
       const session = await fetchSession(code);
-      if (!session) throw new Error('Code not found or expired');
+      if (superseded()) return;
+      if (!session) throw new UserError('That code was not found — it may have expired.');
       offerSdp = decompressSdp(session.offer);
     }
 
     const turnServers = sameWifiCheckbox.checked ? [] : await getTurnServers();
+    if (superseded()) return;
+
     const pc = createPeerConnection(sameWifiCheckbox.checked, turnServers);
     state.pc = pc;
     wirePeerConnectionLifecycle(pc);
     pc.ondatachannel = (event) => setupDataChannel(event.channel);
 
     await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+    if (superseded()) return;
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitForIceGatheringComplete(pc);
+    if (superseded()) return;
 
     // The answer still relays back through Cloudflare either way — it's a
     // small, one-time blob and the host is already polling for it there.
     setStatus('Registering…', 'connecting', 'Sending handshake via Cloudflare');
     await submitAnswer(code, compressSdp(pc.localDescription.sdp));
   } catch (err) {
-    connectError.textContent = err.message;
+    // A second scan/click tore this attempt down mid-flight; the newer one
+    // owns the UI, so stay out of its way.
+    if (superseded()) return;
+    // Raw DOMExceptions from WebRTC mean nothing to the person reading this.
+    connectError.textContent =
+      err instanceof UserError ? err.message : "Couldn't connect — please try again with a fresh code.";
     connectError.classList.remove('hidden');
     startHost();
   }
@@ -738,6 +833,10 @@ cameraToggleBtn.addEventListener('click', async () => {
         state.scanner = scanner;
         await scanner.start();
       } catch {
+        // The scanner may already own a live camera stream — starting it is
+        // what failed, not acquiring it — so release it before giving up,
+        // otherwise the camera stays on with no handle left to stop it.
+        await stopScanner();
         showSlot('qr');
         connectError.textContent = 'Camera unavailable — enter the code instead.';
         connectError.classList.remove('hidden');
